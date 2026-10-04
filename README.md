@@ -75,6 +75,12 @@ Generated packages are written to `dist/`. CI checks host behavior; it does not 
 
 ## Development and licensing
 
+### Credits
+
+**Credit goes to [OpenCloudGaming](https://github.com/OpenCloudGaming), the [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) authors and contributors, and the [OpenNOW-Switch](https://github.com/OpenCloudGaming/OpenNOW-Switch) contributors.** Their open-source work provides the authentication, streaming protocol and transport foundations that made this native PS5 adaptation possible. This repository is an independent PS5 port prototype, not the official OpenNOW application.
+
+The PS5 platform, decoder and GPU work also builds on public projects including ProsperoLight, the PS5 hardware video research, Kodi PS5, ps5-opengl and the native application boilerplate. Their specific roles, licenses and source revisions are retained in the third-party notices and source headers.
+
 See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.1-alpha.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
 
 The combined native application is **GPL-3.0-or-later**. Third-party components retain their notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), `licenses/` and source headers. Exact upstream revisions and hashes are recorded in [upstream-lock.json](upstream-lock.json). Public dependency retrieval/build scripts and local GPU modifications are included; no captured game content is distributed.

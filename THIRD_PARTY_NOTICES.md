@@ -2,6 +2,8 @@
 
 ## Credits and acknowledgements
 
+OpenNOW PS5 is an independent native adaptation made possible by **OpenCloudGaming's OpenNOW and OpenNOW-Switch authors and contributors**. OpenNOW supplies the upstream desktop/protocol reference and the GPL-3.0-or-later NVST QoS work; OpenNOW-Switch supplies the MIT-licensed authentication, transport and negotiation foundations. Project links: [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW), [OpenNOW-Switch](https://github.com/OpenCloudGaming/OpenNOW-Switch). Exact revisions, local adaptations and retained licenses are detailed below and in `upstream-lock.json`.
+
 | Project | Role |
 | --- | --- |
 | [ps5-payload-dev/sdk](https://github.com/ps5-payload-dev/sdk) | Public PS5 headers, libc++ headers, sysroot, and Clang target support |
