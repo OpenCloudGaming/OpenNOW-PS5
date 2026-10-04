@@ -20,20 +20,10 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     published.state=State::authenticated;
     publishedCloud.state=opennow::CloudState::catalog;
     const auto press=[&](unsigned buttons){testButtons=0;draw(canvas);testButtons=buttons;draw(canvas);};
-    ageRequested=true;draw(canvas);
-    assert(ageInput.open&&!*ageInput.text&&ageInput.playAfterSave);
     press(PS5_PAD_BUTTON_OPTIONS);
-    assert(ageInput.open&&*ageInput.error&&command.load()==0);
-    press(PS5_PAD_BUTTON_CIRCLE);
-    assert(!ageInput.open&&command.load()==0&&!http.cancelled);
-    press(PS5_PAD_BUTTON_OPTIONS);
-    assert(ageInput.open&&!ageInput.playAfterSave);
-    press(PS5_PAD_BUTTON_TRIANGLE);
-    assert(!*ageInput.text&&!searchInput.open);
+    assert(command.load()==0&&!searchInput.open&&!http.cancelled);
     press(PS5_PAD_BUTTON_CROSS);
-    assert(!std::strcmp(ageInput.text,"0")&&command.load()==0);
-    press(PS5_PAD_BUTTON_CIRCLE);
-    assert(!ageInput.open&&command.load()==0&&!http.cancelled);
+    assert(command.exchange(0)==5&&!searchInput.open&&!http.cancelled);
     press(PS5_PAD_BUTTON_TRIANGLE);
     assert(searchInput.open);
     press(PS5_PAD_BUTTON_CIRCLE);
@@ -60,11 +50,11 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     press(PS5_PAD_BUTTON_CIRCLE);
     assert(command.exchange(0)==10&&http.cancelled);
     http.cancelled=false;published.state=State::authenticated;publishedSession=false;
-    ageInput.begin(-1,true);testButtons=0;draw(canvas);
+    testButtons=0;draw(canvas);
     activeHttp=nullptr;
     std::puts("Native draw controller scenarios passed");
     return true;
 }
 }
 
-int main() {ps5::demo::run(scenarios,"Age controller checks");}
+int main() {ps5::demo::run(scenarios,"Native controller checks");}

@@ -22,7 +22,7 @@ public:
     Cloud(Request r,void* c):request_(r),context_(c){}
     void load(const char* jwt,const char* device,const char* search="",bool next=false) noexcept;
     void select(int delta) noexcept;
-    void launch(const char* jwt,const char* device,std::uint64_t now,int userAge=-1,StreamProfile profile=StreamProfile::quality) noexcept;
+    void launch(const char* jwt,const char* device,std::uint64_t now,StreamProfile profile=StreamProfile::quality) noexcept;
     void tick(const char* jwt,const char* device,std::uint64_t now) noexcept;
     bool stop(const char* jwt,const char* device) noexcept;
     void reset() noexcept;

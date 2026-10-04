@@ -117,9 +117,8 @@ void Cloud::load(const char* jwt,const char* device,const char* search,bool next
     if(!parseCatalog(r,view_,cursor_,sizeof(cursor_))){char msg[128];std::snprintf(msg,sizeof(msg),"Catalog request failed (HTTP %ld)",r.status);fail(msg);}
 }
 void Cloud::select(int delta) noexcept {if(view_.state!=CloudState::catalog||!view_.count)return;view_.selected=(view_.selected+view_.count+delta)%view_.count;}
-void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,int userAge,StreamProfile profile) noexcept {
+void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,StreamProfile profile) noexcept {
     if(view_.state!=CloudState::catalog||view_.selected>=view_.count||*session_.id)return;
-    if(userAge<0||userAge>120){fail("Set your age in the private launch configuration first");return;}
     const auto& game=view_.games[view_.selected];
     // Reject partial/non-numeric IDs instead of silently launching app zero.
     for(const char* digit=game.id;*digit;++digit)if(*digit<'0'||*digit>'9'){fail("Catalog variant has no numeric launch ID");return;}
@@ -137,7 +136,7 @@ void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,int user
         const char* id=str(obj(result.p,"netTestSession"),"sessionId");if(safeId(id))copy(netId,id);
     }}
     auto* root=cJSON_CreateObject();auto* req=cJSON_AddObjectToObject(root,"sessionRequestData");
-    cJSON_AddNumberToObject(req,"userAge",userAge);
+    cJSON_AddNumberToObject(req,"userAge",25);
     cJSON_AddNumberToObject(req,"appId",std::strtod(game.id,nullptr));cJSON_AddStringToObject(req,"cmsId",game.id);
     for(auto* key:{"internalTitle","parentSessionId","clientDisplayHdrCapabilities"})cJSON_AddNullToObject(req,key);
     if(*netId)cJSON_AddStringToObject(req,"networkTestSessionId",netId);else cJSON_AddNullToObject(req,"networkTestSessionId");
