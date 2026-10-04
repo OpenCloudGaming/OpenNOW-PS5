@@ -21,8 +21,12 @@ static Response request(void* p,const char* method,const char* url,const char* b
 int main(){
  {
   Mock fresh;Cloud client(request,&fresh);client.load("fixture-jwt","fixture-device");
+  assert(client.view().revision==1);
+  client.focus(7);assert(client.view().selected==0);
+  client.focus(1);assert(client.view().selected==1);client.focus(0);
   client.launch("fixture-jwt","fixture-device",1);
   assert(fresh.posts==1&&client.view().state==CloudState::queued);
+  assert(client.view().queuePosition==5&&client.view().setupStep==-1);
   assert(fresh.body.find("\"userAge\":25")!=std::string::npos);
   assert(client.stop("fixture-jwt","fixture-device"));
  }
@@ -57,7 +61,9 @@ int main(){
  assert(m.body.find("\"userAge\":25")!=std::string::npos);assert(m.nettests==1);assert(m.body.find("\"networkTestSessionId\":\"net-fixture\"")!=std::string::npos);
  c.launch("fixture-jwt","fixture-device",11);assert(m.posts==1);
  c.tick("fixture-jwt","fixture-device",12);assert(c.view().state==CloudState::queued);c.tick("fixture-jwt","fixture-device",13);assert(c.view().state==CloudState::ready);
- assert(c.stop("fixture-jwt","fixture-device")&&m.deletes==1);assert(!*c.session().id);assert(c.view().state==CloudState::catalog);
+ assert(c.view().queuePosition==-1&&c.view().setupStep==-1);
+ const unsigned pageRevision=c.view().revision;assert(pageRevision==5);
+ assert(c.stop("fixture-jwt","fixture-device")&&m.deletes==1);assert(c.view().queuePosition==-1);assert(!*c.session().id);assert(c.view().state==CloudState::catalog);
  {
   Mock transition;
   transition.created=R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":1,"sessionControlInfo":{"ip":"control.geforcenow.com","port":443}}})";
@@ -111,7 +117,7 @@ int main(){
   assert(c.stop("fixture-jwt","fixture-device"));
  }
  m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2}})";c.launch("fixture-jwt","fixture-device",30);c.tick("fixture-jwt","fixture-device",33);assert(std::strstr(c.view().message,"no supported streaming address"));c.stop("fixture-jwt","fixture-device");
- m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":1,"seatSetupInfo":{"seatSetupStep":3}}})";c.launch("fixture-jwt","fixture-device",40);c.tick("fixture-jwt","fixture-device",43);assert(std::strstr(c.view().message,"setup step 3"));c.stop("fixture-jwt","fixture-device");
+ m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":1,"seatSetupInfo":{"seatSetupStep":3}}})";c.launch("fixture-jwt","fixture-device",40);c.tick("fixture-jwt","fixture-device",43);assert(std::strstr(c.view().message,"setup step 3"));assert(c.view().setupStep==3&&c.view().queuePosition==-1);c.stop("fixture-jwt","fixture-device");
  m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":6}})";
  c.launch("fixture-jwt","fixture-device",40);c.tick("fixture-jwt","fixture-device",43);
  assert(c.view().state==CloudState::queued);assert(std::strstr(c.view().message,"resuming"));

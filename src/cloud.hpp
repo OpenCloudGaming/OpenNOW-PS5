@@ -10,6 +10,9 @@ struct CloudView {
     CloudState state=CloudState::idle;
     Game games[60]{};
     unsigned count=0, selected=0;
+    unsigned revision=0;
+    int queuePosition=-1;
+    int setupStep=-1;
     bool hasNext=false;
     char message[192]{};
 };
@@ -24,6 +27,7 @@ public:
     Cloud(Request r,void* c):request_(r),context_(c){}
     void load(const char* jwt,const char* device,const char* search="",bool next=false) noexcept;
     void select(int delta) noexcept;
+    void focus(unsigned index) noexcept;
     void launch(const char* jwt,const char* device,std::uint64_t now,StreamProfile profile=StreamProfile::quality) noexcept;
     void tick(const char* jwt,const char* device,std::uint64_t now) noexcept;
     bool stop(const char* jwt,const char* device) noexcept;

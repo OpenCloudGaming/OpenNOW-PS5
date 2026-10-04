@@ -86,7 +86,7 @@ bool parseCatalog(const Response& r,CloudView& out,char* cursor,std::size_t capa
     copy(parsed.message,parsed.count?"Choose a game and store":"No games found in this catalog page");out=parsed;return true;
 }
 void Cloud::fail(const char* text) noexcept {view_.state=CloudState::failed;std::snprintf(view_.message,sizeof(view_.message),"%s",text);}
-void Cloud::reset() noexcept {secureErase(&session_,sizeof(session_));view_={};base_[0]=vpc_[0]=cursor_[0]=search_[0]=0;}
+void Cloud::reset() noexcept {secureErase(&session_,sizeof(session_));const unsigned revision=view_.revision;view_={};view_.revision=revision;base_[0]=vpc_[0]=cursor_[0]=search_[0]=0;}
 void Cloud::load(const char* jwt,const char* device,const char* search,bool next) noexcept {
     if(*session_.id){fail("Stop the active session before browsing");return;}
     view_.state=CloudState::loading;
@@ -113,9 +113,12 @@ void Cloud::load(const char* jwt,const char* device,const char* search,bool next
     char* body=cJSON_PrintUnformatted(root);cJSON_Delete(root);if(!body){fail("Out of memory");return;}
     auto r=request_(context_,"POST","https://games.geforce.com/graphql",body,jwt,device);cJSON_free(body);
     if(r.error){fail(r.error);return;}
+    const unsigned revision=view_.revision;
     if(!parseCatalog(r,view_,cursor_,sizeof(cursor_))){char msg[128];std::snprintf(msg,sizeof(msg),"Catalog request failed (HTTP %ld)",r.status);fail(msg);}
+    else view_.revision=revision+1;
 }
 void Cloud::select(int delta) noexcept {if(view_.state!=CloudState::catalog||!view_.count)return;view_.selected=(view_.selected+view_.count+delta)%view_.count;}
+void Cloud::focus(unsigned index) noexcept {if(view_.state==CloudState::catalog&&index<view_.count)view_.selected=index;}
 void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,StreamProfile profile) noexcept {
     if(view_.state!=CloudState::catalog||view_.selected>=view_.count||*session_.id)return;
     const auto& game=view_.games[view_.selected];
@@ -164,6 +167,7 @@ void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,StreamPr
     auto r=request_(context_,"POST",url,body,jwt,device);cJSON_free(body);parseSession(r);nextPoll_=now+3;
 }
 bool Cloud::parseSession(const Response& r) noexcept {
+    view_.queuePosition=view_.setupStep=-1;
     if(r.error){fail(r.error);return false;}Json root(r);auto* sess=obj(root.p,"session");
     const auto* requestStatus=obj(root.p,"requestStatus");
     const bool patching=num(requestStatus,"statusCode")==41&&std::strstr(str(requestStatus,"statusDescription"),"APP_PATCHING_STATUS");
@@ -210,8 +214,9 @@ bool Cloud::parseSession(const Response& r) noexcept {
     else {
         view_.state=CloudState::queued;
         if(state==2||state==3)copy(view_.message,"Server ready, but no supported streaming address received");
-        else if(state==1)std::snprintf(view_.message,sizeof(view_.message),"Server preparing game - setup step %d",num(obj(sess,"seatSetupInfo"),"seatSetupStep",-1));
+        else if(state==1){view_.setupStep=num(obj(sess,"seatSetupInfo"),"seatSetupStep",-1);std::snprintf(view_.message,sizeof(view_.message),"Server preparing game - setup step %d",view_.setupStep);}
         else {int queue=num(obj(sess,"seatSetupInfo"),"queuePosition",num(sess,"queuePosition",-1));
+            view_.queuePosition=queue<0?-1:queue;
             if(queue<0)copy(view_.message,"Waiting for server allocation (queue position unavailable)");
             else std::snprintf(view_.message,sizeof(view_.message),"Waiting for server allocation - queue position %d",queue);
         }
@@ -224,7 +229,7 @@ void Cloud::tick(const char* jwt,const char* device,std::uint64_t now) noexcept 
     parseSession(request_(context_,"GET",url,nullptr,jwt,device));
 }
 bool Cloud::stop(const char* jwt,const char* device) noexcept {
-    if(*session_.id){char url[768];std::snprintf(url,sizeof(url),"%sv2/session/%s",base_,session_.id);auto r=request_(context_,"DELETE",url,nullptr,jwt,device);if(r.error||((r.status!=404&&r.status!=410)&&(r.status<200||r.status>=300))){fail("Unable to stop cloud session. Retry STOP SESSION");return false;}}
-    secureErase(&session_,sizeof(session_));view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");return true;
+    if(*session_.id){char url[768];std::snprintf(url,sizeof(url),"%sv2/session/%s",base_,session_.id);auto r=request_(context_,"DELETE",url,nullptr,jwt,device);if(r.error||((r.status!=404&&r.status!=410)&&(r.status<200||r.status>=300))){fail("Unable to stop cloud session");return false;}}
+    secureErase(&session_,sizeof(session_));view_.queuePosition=view_.setupStep=-1;view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");return true;
 }
 }

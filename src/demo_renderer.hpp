@@ -42,6 +42,20 @@ class Canvas final
                   Color color) noexcept;
     void button(unsigned x, unsigned y, Button button, unsigned size, Color color) noexcept;
     void text(unsigned x, unsigned y, std::string_view value, unsigned scale, Color color) noexcept;
+    void coverage(int x, int y, unsigned width, unsigned height, const std::uint8_t *mask,
+                  unsigned stride, Color color, unsigned alpha = 255) noexcept;
+    void roundRect(float x, float y, float w, float h, float radius, Color color,
+                   unsigned alpha = 255) noexcept;
+    void roundRectStroke(float x, float y, float w, float h, float radius, float thickness,
+                         Color color, unsigned alpha = 255) noexcept;
+    void verticalGradient(float x, float y, float w, float h, float radius, Color top,
+                          Color bottom) noexcept;
+    void line(float x0, float y0, float x1, float y1, float thickness, Color color,
+              unsigned alpha = 255) noexcept;
+    void ring(float cx, float cy, float radius, float thickness, Color color,
+              unsigned alpha = 255) noexcept;
+    void disc(float cx, float cy, float radius, Color color, unsigned alpha = 255) noexcept;
+    void polygon(const float *points, unsigned count, Color color, unsigned alpha = 255) noexcept;
 
   private:
     explicit Canvas(std::uint32_t *pixels) noexcept : pixels_{pixels}
