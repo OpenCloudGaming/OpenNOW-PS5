@@ -93,6 +93,13 @@ The BlackBear icon, selection artwork, and default selection track
 (C) 2026 BlackBearReloaded, and distributed under GPL-3.0-or-later. The track
 is titled `Night Drive`.
 
+The OpenNOW PS5 launcher icon and matching background under `docs/branding/`
+are new artwork generated with the built-in image generation tool. They are
+distributed with this project's GPL-3.0-or-later licensing. Prompts and operational
+export details are recorded in `docs/branding/README.md`. These are adaptation
+artwork, not official OpenNOW, Sony or NVIDIA brand assets. The earlier prototype
+icon is retained in that directory.
+
 No proprietary runtime module, encryption key, or game file is included.
 
 ## OpenNOW PS5 port additions

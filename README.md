@@ -1,4 +1,12 @@
+<p align="center">
+  <img src="docs/branding/opennow-icon.png" width="144" height="144" alt="OpenNOW PS5 app icon" />
+</p>
+
 # OpenNOW PS5
+
+![OpenNOW PS5 home-screen background artwork](docs/branding/opennow-background-source.png)
+
+*Original artwork for the PS5 adaptation, prepared for upcoming builds. The 0.0.1-alpha download retains its original launcher artwork. This is artwork, not a gameplay screenshot.*
 
 An experimental native PS5 homebrew client for GeForce NOW, based on the public [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) projects. Native hardware video decoding, GPU presentation, stereo audio and DualSense input are integrated.
 
