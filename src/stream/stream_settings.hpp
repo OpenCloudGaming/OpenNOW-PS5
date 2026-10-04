@@ -49,10 +49,10 @@ inline const char* profileLabel(StreamProfile profile) {
  case StreamProfile::native_4k120: return "4K120 SDR / HARDWARE / 100 MBPS";
  case StreamProfile::native_4k90: return "4K90 SDR / HARDWARE / 100 MBPS";
  case StreamProfile::native_1080: return "1080P60 SDR / HARDWARE / 75 MBPS";
- case StreamProfile::smooth: return "SMOOTH 720P60 / 20 MBPS";
- case StreamProfile::experimental: return "EXPERIMENTAL 1080P60 / 75 MBPS";
- case StreamProfile::compatibility: return "COMPATIBILITY 720P30 / 10 MBPS";
- default: return "QUALITY 1080P30 / 25 MBPS";
+ case StreamProfile::smooth: return "SMOOTH 720P60 SDR / 20 MBPS";
+ case StreamProfile::experimental: return "EXPERIMENTAL 1080P60 SDR / 75 MBPS";
+ case StreamProfile::compatibility: return "COMPATIBILITY 720P30 SDR / 10 MBPS";
+ default: return "QUALITY 1080P30 SDR / 25 MBPS";
  }
 }
 }

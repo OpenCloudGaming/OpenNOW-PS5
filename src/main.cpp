@@ -299,9 +299,9 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         c.text(100,994,"UNOFFICIAL CLIENT",3,green);
     }
 #ifndef OPENNOW_HOST_PREVIEW
-    c.text(1240,929,opennow::gpu::outputLabel(),3,green);
+    c.text(v.state==State::authenticated?1000:100,929,opennow::gpu::outputLabel(),3,green);
 #else
-    c.text(1240,929,"SDR / STEREO",3,green);
+    c.text(v.state==State::authenticated?1000:100,929,"OUTPUT 3840x2160 / 120 HZ / HDR / STEREO",3,green);
 #endif
     if(searchInput.open) {
         c.rectangle(80,300,1760,665,bg);
@@ -309,11 +309,18 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         const std::string_view searchText(*searchInput.text?searchInput.text:"ENTER A GAME TITLE");
         c.text(100,385,searchText.substr(0,65),3,Color::white);
         if(searchText.size()>65)c.text(100,425,searchText.substr(65),3,Color::white);
-        for(unsigned i=0;i<sizeof(opennow::CatalogSearch::keys)-1;++i) {
+        for(unsigned i=0;i<opennow::CatalogSearch::count;++i) {
             char key[2]{opennow::CatalogSearch::keys[i],0};
-            const unsigned x=120+(i%10)*145,y=475+(i/10)*60;
-            if(i==searchInput.selected)c.rectangle(x-10,y-10,key[0]==' '?140:55,50,green);
-            c.text(x,y,key[0]==' '?"SPACE":key,4,i==searchInput.selected?bg:Color::white);
+            const unsigned col=opennow::CatalogSearch::column(i);
+            const unsigned x=i<30?120+col*130:1510+(col-11)*100;
+            const unsigned y=475+opennow::CatalogSearch::row(i)*75;
+            if(i==searchInput.selected)c.rectangle(x-10,y-10,55,50,green);
+            if(key[0]==' ') {
+                const auto color=i==searchInput.selected?bg:Color::white;
+                c.rectangle(x,y+16,3,10,color);
+                c.rectangle(x+25,y+16,3,10,color);
+                c.rectangle(x,y+23,28,3,color);
+            } else c.text(x,y,key,4,i==searchInput.selected?bg:Color::white);
         }
         c.rectangle(100,780,1720,2,static_cast<Color>(0xff40372e));
         control(100,800,Canvas::Button::dpad,"MOVE",Color::white);

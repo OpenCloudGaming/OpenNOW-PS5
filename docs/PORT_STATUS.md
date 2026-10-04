@@ -301,3 +301,15 @@ preservation of unrelated rows and database integrity. Console read-back verifie
 the reference and guards; the user confirmed the background works. Acceptance
 after a full console reboot remains unverified. The repair and its rollback
 backup are console-local and are not part of the application package.
+
+
+## 00.002.035 keyboard layout and profile labels
+
+The search keyboard now has one space key between hyphen and period, a literal
+underscore key, and a separate 123/456/789/0 numeric keypad. Directional navigation
+uses the visual key positions. The output label fits the screen margins, and all
+streaming profiles explicitly state HDR or SDR. Keyboard regressions passed with
+ASan/UBSan; layout previews and the VPS GPU build/import audit passed. All 32 files
+of the final .035 installation were SHA-256 verified with rollback copies. User
+acceptance of these latest refinements remains pending; no new streaming or HDR
+measurements were collected.
