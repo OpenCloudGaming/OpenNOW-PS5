@@ -4,14 +4,18 @@
 #include <cstring>
 #include <string>
 #include <cstdio>
+#include <map>
 using namespace opennow;
 static Response response(const char* s){return {200,const_cast<char*>(s),std::strlen(s),nullptr};}
-struct Mock {unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody,catalogBody;const char* catalog=nullptr;const char* created=nullptr;long stopStatus=200;bool stopError=false;};
+struct Mock {std::map<std::string,const char*> byCursor;unsigned graphql=0;unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody,catalogBody;const char* catalog=nullptr;const char* created=nullptr;long stopStatus=200;bool stopError=false;};
 static Response request(void* p,const char* method,const char* url,const char* body,const char*,const char*) {
  auto& m=*static_cast<Mock*>(p);
  if(std::strstr(url,"serviceUrls"))return response(R"({"gfnServiceInfo":{"gfnServiceEndpoints":[{"idpId":"PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg","streamingServiceUrl":"https://test.geforcenow.com/"}]}})");
  if(std::strstr(url,"serverInfo"))return response(R"({"requestStatus":{"serverId":"GFN-PC"}})");
- if(std::strstr(url,"graphql")){m.catalogBody=body;if(m.catalog)return response(m.catalog);return response(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Fixture Game","variants":[{"id":"42","appStore":"XBOX"},{"id":"43","appStore":"STEAM"}]}]}}})");}
+ if(std::strstr(url,"graphql")){m.catalogBody=body;++m.graphql;
+  if(!m.byCursor.empty()){auto* root=cJSON_Parse(body);std::string cursor=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"variables"),"cursor")->valuestring;cJSON_Delete(root);
+   auto found=m.byCursor.find(cursor);if(found==m.byCursor.end()){auto r=response("{}");r.status=500;return r;}return response(found->second);}
+  if(m.catalog)return response(m.catalog);return response(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Fixture Game","variants":[{"id":"42","appStore":"XBOX"},{"id":"43","appStore":"STEAM"}]}]}}})");}
  if(std::strstr(url,"nettestsession")){++m.nettests;m.netBody=body;return response(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"net-fixture"}})");}
  if(!std::strcmp(method,"POST")){if(m.reject){auto r=response(R"({"requestStatus":{"statusCode":4,"statusDescription":"INTERNAL_ERROR_STATUS","unifiedErrorCode":123}})");r.status=500;return r;}++m.posts;m.body=body;if(m.created)return response(m.created);return response(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":0,"queuePosition":5}})");}
  if(!std::strcmp(method,"DELETE")){++m.deletes;auto r=response("{}");r.status=m.stopStatus;if(m.stopError)r.error="fixture network failure";return r;}
@@ -170,5 +174,143 @@ int main(){
   assert(c.session().profile==profile);c.stop("fixture-jwt","fixture-device");
  }
  m.reject=true;c.launch("fixture-jwt","fixture-device",20);assert(c.view().state==CloudState::failed);assert(std::strstr(c.view().message,"INTERNAL_ERROR_STATUS"));assert(std::strstr(c.view().message,"unified 123"));
+ assert(c.view().launchError&&!*c.session().id);
+ c.dismissLaunchError();assert(!c.view().launchError&&c.view().state==CloudState::catalog);
+ m.reject=false;
+ {
+  assert(artworkUrl("https://img.nvidiagrid.net/apps/101611411/ZZ/GAME_BOX_ART_01_1f4d5087.jpg"));
+  for(const char* bad:{"http://img.nvidiagrid.net/apps/1/a.jpg","https://img.nvidiagrid.net.evil.test/apps/1/a.jpg","https://img.nvidiagrid.net/apps/../token",
+      "https://img.nvidiagrid.net/apps/1/a.jpg?token=1","https://img.nvidiagrid.net/apps/1/a b.jpg","https://img.nvidiagrid.net/apps/","https://evil.test/apps/1.jpg",""})
+   assert(!artworkUrl(bad));
+  std::string longUrl="https://img.nvidiagrid.net/apps/";longUrl.append(200,'a');assert(!artworkUrl(longUrl.c_str()));
+  for(const char* status:{"MANUAL","PLATFORM_SYNC","IN_LIBRARY"})assert(ownedLibraryStatus(status));
+  for(const char* status:{"NOT_OWNED","","UNKNOWN","manual"})assert(!ownedLibraryStatus(status));
+  assert(!ownedLibraryStatus(nullptr));
+  CloudView parsed;char next[128]{};
+  const char* mixed=R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[
+   {"title":"Owned","images":{"GAME_BOX_ART":"https://img.nvidiagrid.net/apps/1/ZZ/GAME_BOX_ART_01_a.jpg","KEY_ART":"https://img.nvidiagrid.net/apps/1/ZZ/KEY_ART_01_b.jpg","HERO_IMAGE":"https://img.nvidiagrid.net/apps/1/ZZ/HERO_IMAGE_01_c.jpg"},
+    "variants":[{"id":"11","appStore":"STEAM","gfn":{"library":{"status":"PLATFORM_SYNC"}}},{"id":"12","appStore":"EPIC","gfn":{"library":{"status":"NOT_OWNED"}}},{"id":"13","appStore":"XBOX"}]},
+   {"title":"Fallback art","images":{"GAME_BOX_ART":"https://evil.test/a.jpg","KEY_ART":"https://img.nvidiagrid.net/apps/2/ZZ/KEY_ART_01_d.jpg","TV_BANNER":"https://img.nvidiagrid.net/apps/2/ZZ/TV_BANNER_01_e.jpg"},
+    "variants":[{"id":"21","appStore":"GOG","gfn":{"library":{"status":"MANUAL"}}}]},
+   {"title":"No art","variants":[{"id":"31","appStore":"STEAM","gfn":{"library":{"status":"IN_LIBRARY"}}}]}]}}})";
+  assert(parseCatalog(response(mixed),parsed,next,sizeof(next),true));
+  assert(parsed.count==3);
+  assert(!std::strcmp(parsed.games[0].id,"11")&&parsed.games[0].owned);
+  assert(!std::strcmp(parsed.games[0].art,"https://img.nvidiagrid.net/apps/1/ZZ/GAME_BOX_ART_01_a.jpg"));
+  assert(!std::strcmp(parsed.games[0].hero,"https://img.nvidiagrid.net/apps/1/ZZ/HERO_IMAGE_01_c.jpg"));
+  assert(!std::strcmp(parsed.games[1].id,"21")&&!std::strcmp(parsed.games[1].art,"https://img.nvidiagrid.net/apps/2/ZZ/KEY_ART_01_d.jpg"));
+  assert(!std::strcmp(parsed.games[1].hero,"https://img.nvidiagrid.net/apps/2/ZZ/TV_BANNER_01_e.jpg"));
+  assert(!std::strcmp(parsed.games[2].id,"31")&&!*parsed.games[2].art&&!*parsed.games[2].hero);
+  next[0]=0;
+  assert(parseCatalog(response(mixed),parsed,next,sizeof(next),false));
+  assert(parsed.count==5&&parsed.games[0].owned&&!parsed.games[1].owned&&!parsed.games[2].owned&&parsed.games[3].owned);
+  const char* empty=R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Unowned","variants":[{"id":"41","appStore":"STEAM","gfn":{"library":{"status":"NOT_OWNED"}}}]}]}}})";
+  next[0]=0;assert(parseCatalog(response(empty),parsed,next,sizeof(next),true));assert(parsed.count==0&&std::strstr(parsed.message,"library"));
+ }
+ {
+  Mock pages;Cloud client(request,&pages);
+  pages.catalog=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"lib-2"},"items":[{"title":"Library One","variants":[{"id":"51","appStore":"STEAM","gfn":{"library":{"status":"MANUAL"}}},{"id":"52","appStore":"EPIC","gfn":{"library":{"status":"NOT_OWNED"}}}]}]}}})";
+  client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(client.library().state==CloudState::catalog&&client.library().count==1&&client.library().hasNext&&client.library().page==0);
+  assert(client.view().state==CloudState::idle&&client.view().count==0);
+  auto* root=cJSON_Parse(pages.catalogBody.c_str());assert(root);
+  assert(std::strstr(cJSON_GetObjectItemCaseSensitive(root,"query")->valuestring,"variants.gfn.library.lastPlayedDate:DESC,computedValues.libraryAddedDate:DESC,sortName:ASC"));
+  assert(std::strstr(cJSON_GetObjectItemCaseSensitive(root,"query")->valuestring,"images{GAME_BOX_ART KEY_ART HERO_IMAGE TV_BANNER}"));
+  auto* vars=cJSON_GetObjectItemCaseSensitive(root,"variables");
+  auto* status=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(vars,"filters"),"variants"),"gfn"),"library"),"status");
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(status,"notEquals")->valuestring,"NOT_OWNED"));
+  assert(cJSON_GetObjectItemCaseSensitive(vars,"fetchCount")->valueint==static_cast<int>(catalogPageSize));
+  assert(!cJSON_GetObjectItemCaseSensitive(vars,"searchString"));
+  cJSON_Delete(root);
+  const unsigned firstRevision=client.library().revision;
+  pages.catalog=R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Library Two","variants":[{"id":"61","appStore":"XBOX","gfn":{"library":{"status":"IN_LIBRARY"}}}]}]}}})";
+  client.loadPage(CatalogSource::library,1,"fixture-jwt","fixture-device");
+  root=cJSON_Parse(pages.catalogBody.c_str());assert(root);
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"variables"),"cursor")->valuestring,"lib-2"));
+  cJSON_Delete(root);
+  assert(client.library().page==1&&!client.library().hasNext&&!std::strcmp(client.library().games[0].id,"61")&&client.library().revision==firstRevision+1);
+  client.loadPage(CatalogSource::library,2,"fixture-jwt","fixture-device");
+  assert(client.library().state==CloudState::failed&&client.library().count==1&&!std::strcmp(client.library().games[0].id,"61"));
+  pages.catalog=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"lib-2"},"items":[{"title":"Library One","variants":[{"id":"51","appStore":"STEAM","gfn":{"library":{"status":"MANUAL"}}}]}]}}})";
+  client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  root=cJSON_Parse(pages.catalogBody.c_str());assert(root);
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"variables"),"cursor")->valuestring,""));
+  cJSON_Delete(root);
+  assert(client.library().page==0&&!std::strcmp(client.library().games[0].id,"51"));
+  pages.catalog=R"({"errors":[{"message":"denied"}]})";
+  client.loadPage(CatalogSource::library,1,"fixture-jwt","fixture-device");
+  assert(client.library().state==CloudState::failed&&client.library().count==1&&!std::strcmp(client.library().games[0].id,"51"));
+  assert(std::strstr(client.library().message,"Library request failed"));
+  assert(client.view().state==CloudState::idle&&!client.view().count);
+  client.launchEntry(CatalogSource::library,0,"fixture-jwt","fixture-device",50,StreamProfile::quality);
+  assert(pages.posts==0&&!*client.session().id);
+  pages.catalog=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"lib-2"},"items":[{"title":"Library One","variants":[{"id":"51","appStore":"STEAM","gfn":{"library":{"status":"MANUAL"}}}]}]}}})";
+  client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  pages.catalog=nullptr;
+  client.load("fixture-jwt","fixture-device");
+  assert(client.view().count==2&&client.library().count==1&&client.library().state==CloudState::catalog);
+  client.launchEntry(CatalogSource::library,0,"fixture-jwt","fixture-device",50,StreamProfile::quality);
+  assert(pages.body.find("\"cmsId\":\"51\"")!=std::string::npos);
+  assert(!std::strcmp(client.view().current.id,"51")&&!std::strcmp(client.view().current.title,"Library One"));
+  client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(client.library().state==CloudState::catalog&&!std::strcmp(client.library().games[0].id,"51"));
+  assert(client.stop("fixture-jwt","fixture-device"));
+  client.launchEntry(CatalogSource::library,5,"fixture-jwt","fixture-device",60,StreamProfile::quality);
+  assert(pages.posts==1&&!*client.session().id);
+ }
+ {
+  Mock filtered;Cloud client(request,&filtered);
+  filtered.byCursor[""]=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"items":[{"title":"Unknown","variants":[{"id":"70","appStore":"STEAM"}]},{"title":"Not owned","variants":[{"id":"71","appStore":"EPIC","gfn":{"library":{"status":"NOT_OWNED"}}}]}]}}})";
+  filtered.byCursor["c1"]=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"c2"},"items":[{"title":"Owned later","variants":[{"id":"72","appStore":"XBOX","gfn":{"library":{"status":"PLATFORM_SYNC"}}}]}]}}})";
+  filtered.byCursor["c2"]=R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Last owned","variants":[{"id":"73","appStore":"GOG","gfn":{"library":{"status":"MANUAL"}}}]}]}}})";
+  client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(client.library().state==CloudState::catalog&&client.library().count==1&&client.library().page==1);
+  assert(!std::strcmp(client.library().games[0].id,"72")&&client.library().hasNext&&filtered.graphql==2);
+  client.loadPage(CatalogSource::library,2,"fixture-jwt","fixture-device");
+  assert(client.library().page==2&&!std::strcmp(client.library().games[0].id,"73")&&!client.library().hasNext);
+  client.loadPage(CatalogSource::library,1,"fixture-jwt","fixture-device",-1);
+  assert(client.library().page==1&&!std::strcmp(client.library().games[0].id,"72"));
+  filtered.graphql=0;
+  client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device",-1);
+  assert(client.library().page==1&&!std::strcmp(client.library().games[0].id,"72")&&filtered.graphql==2);
+  Mock barren;Cloud scanning(request,&barren);
+  std::string pages[emptyPageSkips+3];
+  for(unsigned i=0;i<emptyPageSkips+3;++i) {
+   pages[i]=std::string(R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"e)")+std::to_string(i+1)+R"("},"items":[{"title":"Nope","variants":[{"id":"80","appStore":"STEAM","gfn":{"library":{"status":"NOT_OWNED"}}}]}]}}})";
+   barren.byCursor[i?"e"+std::to_string(i):std::string()]=pages[i].c_str();
+  }
+  scanning.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(scanning.library().state==CloudState::catalog&&!scanning.library().count&&scanning.library().hasNext);
+  assert(scanning.library().page==emptyPageSkips&&barren.graphql==emptyPageSkips+1);
+  scanning.loadPage(CatalogSource::library,scanning.library().page+1,"fixture-jwt","fixture-device");
+  assert(scanning.library().page>emptyPageSkips);
+  Mock lonely;Cloud none(request,&lonely);
+  lonely.byCursor[""]=R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Nope","variants":[{"id":"81","appStore":"STEAM"}]}]}}})";
+  none.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(none.library().state==CloudState::catalog&&!none.library().count&&!none.library().hasNext&&lonely.graphql==1);
+ }
+ {
+  Mock queries;Cloud client(request,&queries);
+  queries.byCursor[""]=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"a1"},"items":[{"title":"Query A","variants":[{"id":"90","appStore":"STEAM"}]}]}}})";
+  queries.byCursor["a1"]=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"a2"},"items":[{"title":"Query A page 2","variants":[{"id":"91","appStore":"STEAM"}]}]}}})";
+  client.load("fixture-jwt","fixture-device","alpha");
+  client.load("fixture-jwt","fixture-device","",true);
+  assert(client.view().page==1&&client.view().hasNext);
+  client.loadPage(CatalogSource::browse,0,"fixture-jwt","fixture-device");
+  assert(client.view().page==0&&client.view().hasNext);
+  queries.graphql=0;
+  client.loadPage(CatalogSource::browse,2,"fixture-jwt","fixture-device");
+  assert(client.view().state==CloudState::failed&&queries.graphql==0);
+  queries.byCursor.erase("");
+  client.load("fixture-jwt","fixture-device","beta");
+  assert(client.view().state==CloudState::failed&&client.view().count==0&&!client.view().hasNext&&client.view().page==0&&queries.graphql==1);
+  client.load("fixture-jwt","fixture-device","",true);
+  client.loadPage(CatalogSource::browse,1,"fixture-jwt","fixture-device");
+  assert(queries.graphql==1&&client.view().count==0);
+  auto* root=cJSON_Parse(queries.catalogBody.c_str());assert(root);
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"variables"),"searchString")->valuestring,"beta"));
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"variables"),"cursor")->valuestring,""));
+  cJSON_Delete(root);
+ }
  puts("Catalog and cloud lifecycle regressions passed");
 }

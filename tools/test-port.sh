@@ -24,7 +24,12 @@ build/host-tests/catalog-search-test
 ${CC:-cc} -O1 -g -fsanitize=address,undefined -c src/vendor/qrcodegen.c -o build/host-tests/qrcode.o
 link_flags=(-Wl,--gc-sections)
 if [[ $(uname -s) == Darwin ]]; then link_flags=(-Wl,-dead_strip); fi
-${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -DOPENNOW_HOST_PREVIEW -Isrc "${link_flags[@]}" tests/main_ui_test.cpp src/demo_renderer.cpp src/ui/font.cpp src/ui/tv_ui.cpp build/host-tests/qrcode.o -o build/host-tests/main-ui-test
+${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -DOPENNOW_HOST_PREVIEW -Isrc "${link_flags[@]}" tests/main_ui_test.cpp src/demo_renderer.cpp src/ui/font.cpp src/ui/tv_ui.cpp src/ui/artwork.cpp src/cloud.cpp src/gfn.cpp build/host-tests/cJSON.o build/host-tests/qrcode.o -o build/host-tests/main-ui-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/settings_file_test.cpp -o build/host-tests/settings-file-test
+build/host-tests/settings-file-test
+${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -DOPENNOW_HOST_PREVIEW -Isrc -c src/demo_renderer.cpp -o build/host-tests/artwork-renderer.o
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -DOPENNOW_HOST_PREVIEW -Isrc tests/artwork_test.cpp src/ui/artwork.cpp src/cloud.cpp src/gfn.cpp build/host-tests/artwork-renderer.o build/host-tests/cJSON.o -lpthread -o build/host-tests/artwork-test
+build/host-tests/artwork-test
 build/host-tests/main-ui-test
 build/host-tests/cloud-test
 
