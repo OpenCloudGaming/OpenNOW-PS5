@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Host validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install host compiler
+        run: sudo apt-get update && sudo apt-get install --yes clang-18 libclang-rt-18-dev
+      - name: Run synthetic host regressions with ASan and UBSan
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: bash tools/test-port.sh

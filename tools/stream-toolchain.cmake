@@ -1,0 +1,7 @@
+set(CMAKE_SYSTEM_NAME FreeBSD)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+set(CMAKE_C_COMPILER /work/tools/stream-cc.sh)
+set(CMAKE_AR /usr/bin/llvm-ar-18)
+set(CMAKE_RANLIB /usr/bin/llvm-ranlib-18)
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+set(CMAKE_C_FLAGS_INIT "-fPIC -ffunction-sections -fdata-sections")

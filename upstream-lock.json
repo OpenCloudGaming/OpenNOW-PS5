@@ -1,0 +1,19 @@
+{
+  "OpenNOW-desktop": "bee18c118dbc89f42319436dcdb172d5b9e15e0c",
+  "OpenNOW-Switch": "8069d3e535c2aaaac0488bd5b456809c6493282f",
+  "ProsperoLight": "8d419dfde822e48edc34181a54241784573926af",
+  "cJSON": "c859b25da02955fef659d658b8f324b5cde87be3",
+  "native-boilerplate-archive-sha256": "133b4ec9d21d1f49148c823131d7fb73f93fe653d35407f71702546a88a12831",
+  "ProsperoLight-hardware-reference": "f6836df2d6a8060dbde193b24ca9099f05f8cef3",
+  "ps5-hardware-video-decoding-research": "59373c33b8eabd111a3bf4459041bfab5c8d48c5",
+  "ps5-opengl-SDK-version": "1.0.0",
+  "ps5-opengl-SDK-archive-sha256": "f93643c04c843d56143b00951df1f8042ea7706ae9f19e4e9abf158e1ead77c5",
+  "kodi-ps5-hardware-reference": "fc6f7771bbd928776d451e13179107ab59487f8c",
+  "kodi-ps5-opengl-reference": "122aa899f9255e37d776b2a5317c86e5e9679907",
+  "ps5-opengl-runtime-source": "dce74910af7f4274c48d05e0ae001b3038462588",
+  "OpenGNM-PSBC-source": "a92a1228ea3a64e4be9f0e61c2a65a5aa7ffed92",
+  "OpenGNM-PSBC-patched-archive-sha256": "2b1f76b6b914f36d0ec096ddf042c570d1cf97cd341cbcf001adc8910bcf9a1e",
+  "OpenNOW-NVST-QoS-reference": "3217d80c029a23a4d558f81c8611e37d0ad7a80d",
+  "OpenNOW-vita-fixed-resolution-protocol-reference": "654a9356a9f01df4a67ea802b8f8c96af7ea2ca3",
+  "PS5-Vulkan-documentation-reference": "4271e2e309d9a7eea3a893f5b94427bb78e586ed"
+}

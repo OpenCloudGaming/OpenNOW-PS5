@@ -1,0 +1,156 @@
+#include "nvst_sdp.hpp"
+
+#include "video_quality_policy.hpp"
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+namespace opennow::webrtc
+{
+namespace
+{
+
+std::string ExtractSdpValue(const std::string& sdp, const std::string& prefix)
+{
+    size_t start = 0;
+    while (start < sdp.size()) {
+        size_t end = sdp.find('\n', start);
+        const size_t length = end == std::string::npos ? std::string::npos : end - start;
+        std::string line = sdp.substr(start, length);
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.rfind(prefix, 0) == 0)
+            return line.substr(prefix.size());
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return "";
+}
+
+} // namespace
+
+std::string BuildNvstSdp(
+    const std::string& answer_sdp,
+    const StreamSettings& settings,
+    const RiInputCapabilities& ri_caps)
+{
+    constexpr int kOfficialMinimumBitrateKbps = 4000;
+    const std::string ice_ufrag = ExtractSdpValue(answer_sdp, "a=ice-ufrag:");
+    const std::string ice_pwd = ExtractSdpValue(answer_sdp, "a=ice-pwd:");
+    const std::string fingerprint = ExtractSdpValue(answer_sdp, "a=fingerprint:sha-256 ");
+    const auto tuning = video::ResolveQualityTuning(settings.image_quality_mode);
+    const int max_bitrate = std::max(kOfficialMinimumBitrateKbps, settings.bitrate_kbps);
+    // Qualified native profiles target the user's stable Ethernet link. A
+    // 4 Mbps floor allowed GFN to starve UHD key pictures (observed QP 50).
+    const bool fixed_quality = settings.hardware;
+    const int minimum_bitrate = fixed_quality ? std::max(kOfficialMinimumBitrateKbps, max_bitrate * 3 / 4) : kOfficialMinimumBitrateKbps;
+    const int initial_bitrate = fixed_quality ? minimum_bitrate : std::max(kOfficialMinimumBitrateKbps, max_bitrate / 4);
+
+    std::vector<std::string> lines = {
+        "v=0",
+        "o=SdpTest test_id_13 14 IN IPv4 127.0.0.1",
+        "s=-",
+        "t=0 0",
+        "a=general.icePassword:" + ice_pwd,
+        "a=general.iceUserNameFragment:" + ice_ufrag,
+        "a=general.dtlsFingerprint:" + fingerprint,
+        "m=video 0 RTP/AVP",
+        "a=msid:fbc-video-0",
+        "a=vqos.fec.rateDropWindow:10",
+        "a=vqos.fec.minRequiredFecPackets:2",
+        "a=vqos.drc.minRequiredBitrateCheckEnabled:1",
+        "a=vqos.fec.repairMinPercent:" + std::to_string(tuning.fec_repair_min_percent),
+        "a=vqos.fec.repairPercent:" + std::to_string(tuning.fec_repair_percent),
+        "a=vqos.fec.repairMaxPercent:" + std::to_string(tuning.fec_repair_max_percent),
+        "a=vqos.dynamicStreamingMode:" + std::to_string(fixed_quality ? 0 : 3),
+        "a=vqos.bllFec.enable:0",
+        "a=vqos.drc.enable:" + std::to_string(fixed_quality ? 0 : 1),
+        "a=video.dx9EnableNv12:1",
+        "a=video.dx9EnableHdr:1",
+        "a=vqos.qpg.enable:1",
+        "a=vqos.resControl.qp.qpg.featureSetting:7",
+        "a=bwe.useOwdCongestionControl:1",
+        "a=video.enableRtpNack:1",
+        "a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:200",
+        "a=vqos.drc.bitrateIirFilterFactor:18",
+        "a=video.packetSize:1140",
+        "a=packetPacing.minNumPacketsPerGroup:" +
+            std::to_string(tuning.pacing_min_packets_per_group),
+        "a=vqos.adjustStreamingFpsDuringOutOfFocus:1",
+        "a=vqos.resControl.cpmRtc.ignoreOutOfFocusWindowState:1",
+        "a=vqos.resControl.perfHistory.rtcIgnoreOutOfFocusWindowState:1",
+        "a=vqos.resControl.cpmRtc.featureMask:" + std::to_string(fixed_quality ? 0 : 3),
+        "a=packetPacing.numGroups:" + std::to_string(tuning.pacing_groups),
+        "a=packetPacing.maxDelayUs:" + std::to_string(tuning.pacing_max_delay_us),
+        "a=packetPacing.minNumPacketsFrame:10",
+        "a=video.rtpNackQueueLength:1024",
+        "a=video.rtpNackQueueMaxPackets:512",
+        "a=video.rtpNackMaxPacketCount:25",
+        "a=video.clientViewportWd:" + std::to_string(settings.width),
+        "a=video.clientViewportHt:" + std::to_string(settings.height),
+        "a=video.maxFPS:" + std::to_string(settings.fps),
+        "a=video.initialBitrateKbps:" + std::to_string(initial_bitrate),
+        "a=video.initialPeakBitrateKbps:" + std::to_string(fixed_quality ? max_bitrate : initial_bitrate),
+        "a=vqos.bw.maximumBitrateKbps:" + std::to_string(max_bitrate),
+        "a=vqos.bw.minimumBitrateKbps:" + std::to_string(minimum_bitrate),
+        // The captured native HEVC stream uses four active references. Ask
+        // for a simpler low-latency prediction structure; the same wire
+        // attribute at value one is used by the pinned GFN Vita reference.
+        "a=video.maxNumReferenceFrames:" + std::to_string(fixed_quality ? 1 : 4),
+        "a=video.mapRtpTimestampsToFrames:1",
+        "a=video.encoderCscMode:3",
+        "a=video.encoderHdrCscMode:4",
+        "a=video.dynamicRangeMode:" + std::to_string(settings.hdr?1:0),
+        "a=video.bitDepth:" + std::to_string(settings.hdr?10:8),
+        "a=video.chromaFormat:1",
+        "a=video.bitStreamFormat:" + std::to_string(settings.codec==VideoCodec::hevc?1:0),
+        "a=video.scalingFeature1:0",
+        "a=video.prefilterParams.prefilterMode:0",
+        "a=video.prefilterParams.prefilterModel:0",
+        "a=video.prefilterParams.denoiseLevel:0",
+        "a=video.prefilterParams.sharpnessLevel:0",
+        "m=audio 0 RTP/AVP",
+        "a=msid:audio",
+        "m=mic 0 RTP/AVP",
+        "a=msid:mic",
+        "a=rtpmap:0 PCMU/8000",
+        "m=application 0 RTP/AVP",
+        "a=msid:input_1",
+        "a=ri.partialReliableThresholdMs:" + std::to_string(ri_caps.partial_reliable_threshold_ms),
+        "a=ri.hidDeviceMask:" + std::to_string(ri_caps.hid_device_mask),
+        "a=ri.enablePartiallyReliableTransferGamepad:" +
+            std::to_string(ri_caps.partial_reliable_gamepad_mask),
+        "a=ri.enablePartiallyReliableTransferHid:" +
+            std::to_string(ri_caps.partial_reliable_hid_mask),
+        "",
+    };
+
+    if (fixed_quality) {
+        // Protocol attributes cross-checked against OpenNOW-vita's fixed
+        // resolution negotiation at the reference pinned in upstream-lock.
+        const std::vector<std::string> fixed = {
+            "a=vqos.dfc.enable:0", "a=vqos.dfc.adjustResAndFps:0",
+            "a=vqos.resControl.cpmRtc.enable:0",
+            "a=vqos.resControl.cpmRtc.minResolutionPercent:100",
+            "a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:999999",
+            "a=vqos.grc.enable:0",
+            "a=vqos.grc.maximumBitrateKbps:" + std::to_string(max_bitrate),
+            "a=vqos.bw.peakBitrateKbps:" + std::to_string(max_bitrate),
+            "a=vqos.bw.serverPeakBitrateKbps:" + std::to_string(max_bitrate),
+            "a=vqos.bw.enableBandwidthEstimation:1", "a=vqos.bw.disableBitrateLimit:0",
+        };
+        const auto audio = std::find(lines.begin(), lines.end(), "m=audio 0 RTP/AVP");
+        lines.insert(audio, fixed.begin(), fixed.end());
+    }
+
+    std::string result;
+    for (const auto& line : lines) {
+        result += line;
+        result += "\n";
+    }
+    return result;
+}
+
+} // namespace opennow::webrtc
