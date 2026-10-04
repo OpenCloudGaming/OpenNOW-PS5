@@ -3,6 +3,7 @@
 #include "vendor/cJSON.h"
 
 #include <cassert>
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -18,6 +19,10 @@ PeerConnectionState nextState = PEER_CONNECTION_NEW;
 std::string incoming;
 std::vector<std::string> candidates;
 std::string remoteSdp;
+std::vector<std::string> outbound;
+std::string connectedUrl;
+void (*localIce)(char*, void*) = nullptr;
+void* localIceContext = nullptr;
 WebSocketClient* websocket = nullptr;
 constexpr const char* answer =
     "v=0\r\na=group:BUNDLE video audio datachannel\r\n"
@@ -66,9 +71,14 @@ struct PeerConnection {
 
 WebSocketClient::WebSocketClient(const std::string& url): url_(url) { ++sockets; websocket = this; }
 WebSocketClient::~WebSocketClient() { assert(!inPoll); --sockets; websocket = nullptr; }
-bool WebSocketClient::connect() { connected_ = socketStarts; last_error_ = "mock connect failure"; return connected_; }
+bool WebSocketClient::connect() {
+    connectedUrl = url_;
+    assert(std::find(custom_headers_.begin(), custom_headers_.end(),
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36") != custom_headers_.end());
+    connected_ = socketStarts; last_error_ = "mock connect failure"; return connected_;
+}
 void WebSocketClient::disconnect() { connected_ = false; }
-void WebSocketClient::send_message(const std::string&) {}
+void WebSocketClient::send_message(const std::string& message) { outbound.push_back(message); }
 void WebSocketClient::poll() {
     inPoll = true;
     if (dropSocket) { connected_ = false; last_error_ = "mock socket loss"; dropSocket = false; }
@@ -105,11 +115,16 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
 void peer_connection_close(PeerConnection*) {}
 void peer_connection_destroy(PeerConnection* pc) { assert(!inPoll && !inLoop); --peers; delete pc; }
 int peer_connection_get_video_rtp_stats(PeerConnection*, PeerVideoRtpStats* stats) { *stats = {}; stats->assembler_ready = assemblerReady; return 0; }
-void peer_connection_onicecandidate(PeerConnection*, void (*)(char*, void*)) {}
+void peer_connection_onicecandidate(PeerConnection* pc, void (*callback)(char*, void*)) { localIce = callback; localIceContext = pc->config.user_data; }
 void peer_connection_oniceconnectionstatechange(PeerConnection* pc, void (*fn)(PeerConnectionState, void*)) { pc->onState = fn; }
 void peer_connection_ondatachannel(PeerConnection*, void (*)(char*, size_t, void*, uint16_t), void (*)(void*), void (*)(void*)) {}
 void peer_connection_set_remote_description(PeerConnection*, const char* sdp, SdpType) { remoteSdp = sdp; }
-const char* peer_connection_create_answer(PeerConnection*) { return nullAnswer ? nullptr : answer; }
+const char* peer_connection_create_answer(PeerConnection*) {
+    if (nullAnswer) return nullptr;
+    char candidate[] = "a=candidate:local 1 udp 1234 192.168.1.2 50000 typ host\r\n";
+    localIce(candidate, localIceContext);
+    return answer;
+}
 int peer_connection_add_ice_candidate(PeerConnection*, char* candidate) { candidates.emplace_back(candidate); return 0; }
 int peer_connection_get_ice_candidate_pair_stats(PeerConnection*, int* total, int*, int*, int*, int*) {
     *total = static_cast<int>(candidates.size()) + (remoteSdp.find("a=candidate:") != std::string::npos);
@@ -240,14 +255,50 @@ int main() {
     assert(stream.start(launch, "test"));
     queuePayload("sdp", (std::string(answer) + "a=candidate:1 1 udp 2122260223 203.0.113.10 47998 typ host\r\n").c_str());
     stream.tick(1000000);
-    assert(remoteSdp.find("198.51.100.55 443 typ host") != std::string::npos);
+    assert(remoteSdp.find("203.0.113.10 47998 typ host") != std::string::npos);
     assert(candidates.empty());
     queuePayload("candidate", "candidate:1 1 udp 2122260223 203.0.113.10 47998 typ host");
     stream.tick(1000001);
+    assert(candidates.back() == "a=candidate:1 1 udp 2122260223 203.0.113.10 47998 typ host");
+    queuePayload("candidate", "candidate:1 1 udp 2122260223 10.0.0.5 47998 typ host");
+    stream.tick(1000002);
     assert(candidates.back() == "a=candidate:1 1 udp 2122260223 198.51.100.55 443 typ host");
     stream.stop();
     assert(!stream.failed());
     clean();
+
+    for (bool audioBundle : {false, true}) {
+        std::strcpy(launch.signaling, "wss://signaling.example/nvst/sign_in?discard=1#fragment");
+        assert(stream.start(launch, "test"));
+        assert(connectedUrl == "wss://signaling.example/nvst/sign_in?peer_id=opennow-test&version=2&peer_role=1&pairing_id=session-test");
+        outbound.clear();
+        auto offer = std::string(answer);
+        if (audioBundle) offer.replace(offer.find("BUNDLE video audio"), 18, "BUNDLE audio video");
+        queuePayload("sdp", offer.c_str());
+        stream.tick(1000000);
+        char lateCandidate[] = "a=candidate:late 1 udp 1234 192.168.1.2 50001 typ host\r\n";
+        localIce(lateCandidate, localIceContext);
+        stream.tick(1000001);
+        int sentCandidates = 0;
+        for (const auto& wire : outbound) {
+            auto* root = cJSON_Parse(wire.c_str());
+            auto* peer = cJSON_GetObjectItemCaseSensitive(root, "peer_msg");
+            auto* message = cJSON_GetObjectItemCaseSensitive(peer, "msg");
+            auto* data = cJSON_IsString(message) ? cJSON_Parse(message->valuestring) : nullptr;
+            if (cJSON_GetObjectItemCaseSensitive(data, "candidate")) {
+                auto* mid = cJSON_GetObjectItemCaseSensitive(data, "sdpMid");
+                auto* index = cJSON_GetObjectItemCaseSensitive(data, "sdpMLineIndex");
+                assert(cJSON_IsString(mid) && !std::strcmp(mid->valuestring, audioBundle ? "audio" : "video"));
+                assert(cJSON_IsNumber(index) && index->valueint == (audioBundle ? 1 : 0));
+                ++sentCandidates;
+            }
+            cJSON_Delete(data);
+            cJSON_Delete(root);
+        }
+        assert(sentCandidates == 2);
+        stream.stop();
+        clean();
+    }
 
     assert(stream.start(launch, "test"));
     queuePayload("sdp", answer);

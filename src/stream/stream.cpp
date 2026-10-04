@@ -32,7 +32,7 @@ void be(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes
 }
 bool Stream::start(const Session& s,const char* device) {
  qos_={};nextQos_=0;qosRequested_=false;
- stop();opennow_media_note("START 00.002.037");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
+ stop();opennow_media_note("START 00.002.038");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
  capture_.arm("/data/opennow",settings_.codec==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){fail("Invalid secure signaling endpoint");release();return false;}
  if(!media_.start(settings_)){fail("Could not initialize video decoder / audio output");release();return false;}
@@ -44,10 +44,10 @@ bool Stream::start(const Session& s,const char* device) {
  PeerVideoRtpStats initial{};peer_connection_get_video_rtp_stats(pc_,&initial);
  if(!initial.assembler_ready){fail("Video assembler initialization failed");release();return false;}
  peer_connection_onicecandidate(pc_,ice);peer_connection_oniceconnectionstatechange(pc_,state);peer_connection_ondatachannel(pc_,dataMessage,dataOpen,dataClose);
- std::string url=s.signaling;auto q=url.find('?');if(q!=std::string::npos)url.resize(q);while(url.size()&&url.back()=='/')url.pop_back();if(url.size()<7||url.substr(url.size()-7)!="sign_in")url+="/sign_in";
+ std::string url=s.signaling;auto q=url.find_first_of("?#");if(q!=std::string::npos)url.resize(q);while(url.size()&&url.back()=='/')url.pop_back();if(url.size()<7||url.substr(url.size()-7)!="sign_in")url+="/sign_in";
  url+="?peer_id="+name_+"&version=2&peer_role=1&pairing_id="+s.id;
- ws_=new WebSocketClient(url);ws_->set_custom_headers({"Origin: https://play.geforcenow.com",std::string("Sec-WebSocket-Protocol: x-nv-sessionid.")+s.id});ws_->set_on_message([this](const std::string& m){message(m);});
- if(!ws_->connect()){fail(("Signaling: "+ws_->get_last_error()).c_str());release();return false;}
+ ws_=new WebSocketClient(url);ws_->set_custom_headers({"Origin: https://play.geforcenow.com",std::string("Sec-WebSocket-Protocol: x-nv-sessionid.")+s.id,"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"});ws_->set_on_message([this](const std::string& m){message(m);});
+ if(!ws_->connect()){opennow_media_note(ws_->get_last_error().c_str());fail(("Signaling: "+ws_->get_last_error()).c_str());release();return false;}
  peerInfo();std::snprintf(status_,sizeof(status_),"Waiting for NVIDIA stream offer");return true;
 }
 void Stream::fail(const char* reason){if(!failed_){failed_=true;std::snprintf(status_,sizeof(status_),"%s",reason);}}
@@ -57,10 +57,15 @@ void Stream::release() {
  if(pc_){PS5_PadData neutral{};input(neutral,lastInput_+20000);peer_connection_close(pc_);peer_connection_destroy(pc_);pc_=nullptr;}
  if(ws_){ws_->disconnect();delete ws_;ws_=nullptr;}
  if(runtimeReady_){peer_deinit();runtimeReady_=false;}
- media_.stop();secureErase(&session_,sizeof(session_));inputReady_=false;answerSent_=false;candidates_.clear();
+ media_.stop();secureErase(&session_,sizeof(session_));inputReady_=false;answerSent_=false;candidates_.clear();candidateMid_.clear();candidateMLine_=0;
 }
 void Stream::send(cJSON* root){char* value=cJSON_PrintUnformatted(root);if(value&&ws_)ws_->send_message(value);cJSON_free(value);}
 void Stream::payload(cJSON* value){if(!ws_)return;char* data=cJSON_PrintUnformatted(value);if(!data)return;auto* root=cJSON_CreateObject();auto* msg=cJSON_AddObjectToObject(root,"peer_msg");cJSON_AddNumberToObject(msg,"from",peerId_);cJSON_AddNumberToObject(msg,"to",remoteId_);cJSON_AddStringToObject(msg,"msg",data);cJSON_AddNumberToObject(root,"ackid",++ack_);send(root);cJSON_Delete(root);cJSON_free(data);}
+void Stream::sendCandidates(){
+ if(!answerSent_)return;
+ for(const auto& line:candidates_){auto* c=cJSON_CreateObject();cJSON_AddStringToObject(c,"candidate",line.c_str());cJSON_AddStringToObject(c,"sdpMid",candidateMid_.c_str());cJSON_AddNumberToObject(c,"sdpMLineIndex",candidateMLine_);payload(c);cJSON_Delete(c);}
+ candidates_.clear();
+}
 void Stream::peerInfo(){auto* root=cJSON_CreateObject();cJSON_AddNumberToObject(root,"ackid",++ack_);auto* info=cJSON_AddObjectToObject(root,"peer_info");cJSON_AddStringToObject(info,"browser","Chrome");cJSON_AddStringToObject(info,"browserVersion","131");cJSON_AddBoolToObject(info,"connected",true);cJSON_AddNumberToObject(info,"id",peerId_);cJSON_AddStringToObject(info,"name",name_.c_str());cJSON_AddNumberToObject(info,"peerRole",0);const auto resolution=std::to_string(settings_.width)+"x"+std::to_string(settings_.height);cJSON_AddStringToObject(info,"resolution",resolution.c_str());cJSON_AddNumberToObject(info,"version",2);send(root);cJSON_Delete(root);}
 void Stream::message(const std::string& message) {
  if(failed_||message.size()>65536)return;auto* root=cJSON_ParseWithLength(message.c_str(),message.size());if(!root)return;
@@ -75,7 +80,11 @@ void Stream::message(const std::string& message) {
     mediaSdp("OFFER",offer);peer_connection_set_remote_description(pc_,offer.c_str(),SDP_TYPE_OFFER);
     const char* raw=peer_connection_create_answer(pc_);
     if(raw&&!entropyFailed){auto answer=sdp::AdaptAnswerSdpToOffer(raw,offer,settings_);if(answer.empty()){fail("Server did not offer the selected video codec");}else{mediaSdp("ANSWER",answer);auto nvst=webrtc::BuildNvstSdp(answer,settings_,sdp::ParseRiInputCapabilities(offer));auto* a=cJSON_CreateObject();cJSON_AddStringToObject(a,"type","answer");cJSON_AddStringToObject(a,"sdp",answer.c_str());cJSON_AddStringToObject(a,"nvstSdp",nvst.c_str());payload(a);cJSON_Delete(a);answerSent_=true;
-     for(const auto& line:candidates_){auto* c=cJSON_CreateObject();cJSON_AddStringToObject(c,"candidate",line.c_str());cJSON_AddStringToObject(c,"sdpMid","0");cJSON_AddNumberToObject(c,"sdpMLineIndex",0);payload(c);cJSON_Delete(c);}candidates_.clear();
+     const auto bundle=sdp::ExtractSdpValue(answer,"a=group:BUNDLE ");
+     candidateMid_=bundle.empty()?sdp::ExtractSdpValue(answer,"a=mid:"):bundle.substr(0,bundle.find(' '));
+     int section=-1;
+     for(std::size_t pos=0;pos<answer.size();){auto end=answer.find("\r\n",pos);if(end==std::string::npos)end=answer.size();const auto line=answer.substr(pos,end-pos);if(line.rfind("m=",0)==0)++section;if(line=="a=mid:"+candidateMid_){candidateMLine_=section;break;}pos=end+2;}
+     sendCandidates();
      int pairs=0;if(peer_connection_get_ice_candidate_pair_stats(pc_,&pairs,nullptr,nullptr,nullptr,nullptr)==0&&pairs==0){auto manual=sdp::BuildManualMediaCandidate(session_.signaling,session_.mediaIp,session_.mediaPort,100);if(!manual.empty())peer_connection_add_ice_candidate(pc_,manual.data());}
      std::snprintf(status_,sizeof(status_),"Negotiating secure media connection");
     }}else{fail(entropyFailed?"Secure entropy failed":"Unable to create WebRTC answer");}
@@ -100,7 +109,7 @@ void Stream::tick(std::uint64_t now){if(!active())return;if(entropyFailed)fail("
  if(!ws_->is_connected())fail(("Signaling: "+ws_->get_last_error()).c_str());
  if(failed_){release();return;}
  if(!inputReady_&&inputOpened_&&now-inputOpened_>1500000){inputReady_=true;protocol_=2;}
- if(answerSent_&&!candidates_.empty()){for(const auto& line:candidates_){auto* c=cJSON_CreateObject();cJSON_AddStringToObject(c,"candidate",line.c_str());cJSON_AddStringToObject(c,"sdpMid","0");cJSON_AddNumberToObject(c,"sdpMLineIndex",0);payload(c);cJSON_Delete(c);}candidates_.clear();}
+ sendCandidates();
 for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
  if(failed_){release();return;}
  recoverVideoLoss();
@@ -136,7 +145,7 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
    // Replace a small private snapshot, so late symptoms remain observable after
    // the bounded startup media log has filled. No session/network secrets.
    if(auto* live=std::fopen("/data/opennow/live-video.status","wb")){
-    std::fprintf(live,"version=00.002.037 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
+    std::fprintf(live,"version=00.002.038 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
      static_cast<unsigned long long>(now-started_),media_.decodedWidth.load(),media_.decodedHeight.load(),media_.videoBytes.load(),media_.frames.load(),media_.presented.load(),media_.decodeError.load(),media_.actualHdr.load(),stats.access_units_dropped,stats.sequence_gaps,media_.queueDrops.load(),media_.recoveryResets.load(),peer_connection_datachannel_is_open(pc_,6),qos_.queuedCount(),capture_.bytes(),capture_.done());
     std::fprintf(live,"au_received=%u queue_depth=%u queue_peak=%u queue_max_us=%llu decode_calls=%u decode_us=%llu decode_max_us=%llu gpu_calls=%u gpu_us=%llu gpu_max_us=%llu\n",
      stats.access_units_completed,media_.queueDepth.load(),media_.queuePeak.load(),static_cast<unsigned long long>(media_.queueMaxUs.load()),media_.decodeCalls.load(),static_cast<unsigned long long>(media_.decodeUs.load()),static_cast<unsigned long long>(media_.decodeMaxUs.load()),media_.gpuCalls.load(),static_cast<unsigned long long>(media_.gpuUs.load()),static_cast<unsigned long long>(media_.gpuMaxUs.load()));

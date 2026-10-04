@@ -23,28 +23,59 @@ int main()
 {
     const std::string mapped_offer =
         "v=0\r\nc=IN IP4 0.0.0.0\r\n"
-        "a=candidate:1 1 udp 2122260223 203.0.113.10 47998 typ host\r\n";
+        "a=candidate:1 1 udp 2122260223 10.0.175.0 47998 typ host\r\n";
     const auto mapped = opennow::sdp::PrepareGfnOfferSdp(
         mapped_offer, "wss://signaling.example/nvst/", "198.51.100.55", 443);
     assert(mapped.find("a=candidate:1 1 udp 2122260223 198.51.100.55 443 typ host") != std::string::npos);
     assert(mapped.find("c=IN IP4 0.0.0.0") != std::string::npos);
     assert(opennow::sdp::PrepareGfnOfferSdp(mapped_offer, "wss://signaling.example/nvst/", "", 0) == mapped_offer);
     assert(opennow::sdp::PrepareGfnOfferSdp(mapped_offer, "wss://signaling.example/nvst/", "198.51.100.55", 0) == mapped_offer);
-    const std::string trickled = "candidate:1 1 udp 2122260223 203.0.113.10 47998 typ host generation 0";
+    const std::string trickled = "candidate:1 1 udp 2122260223 10.0.175.0 47998 typ host generation 0";
     assert(opennow::sdp::RewriteGfnMediaCandidate(trickled, "198.51.100.55", 18784) ==
         "candidate:1 1 udp 2122260223 198.51.100.55 18784 typ host generation 0");
     assert(opennow::sdp::RewriteGfnMediaCandidate(trickled, "198.51.100.55", 65536) == trickled);
     assert(opennow::sdp::RewriteGfnMediaCandidate("candidate:malformed", "198.51.100.55", 443) == "candidate:malformed");
+    for (const auto* address : {"203.0.113.10", "8.8.8.8", "0.0.0.1", "9.255.255.255", "11.0.0.0",
+             "100.63.255.255", "100.128.0.0", "126.255.255.255", "128.0.0.0", "169.253.255.255",
+             "169.255.0.0", "172.15.255.255", "172.32.0.0", "192.167.255.255", "192.169.0.0",
+             "223.255.255.255", "240.0.0.0", "255.255.255.255", "host.local", "2001:db8::1", "300.1.1.1"}) {
+        const auto candidate = std::string("candidate:1 1 UDP 1 ") + address + " 47998 typ host generation 0";
+        assert(opennow::sdp::RewriteGfnMediaCandidate(candidate, "198.51.100.55", 443) == candidate);
+        const auto offer = "v=0\r\na=" + candidate + "\r\n";
+        assert(opennow::sdp::PrepareGfnOfferSdp(offer, "", "198.51.100.55", 443) == offer);
+    }
+    for (const auto* address : {"0.0.0.0", "10.0.0.0", "10.255.255.255", "100.64.0.0", "100.127.255.255",
+             "127.0.0.0", "127.255.255.255", "169.254.0.0", "169.254.255.255", "172.16.0.0",
+             "172.31.255.255", "192.168.0.0", "192.168.255.255", "224.0.0.0", "239.255.255.255"}) {
+        const auto candidate = std::string("candidate:1 1 UDP 1 ") + address + " 47998 typ host generation 0";
+        const std::string rewritten = "candidate:1 1 UDP 1 198.51.100.55 443 typ host generation 0";
+        assert(opennow::sdp::RewriteGfnMediaCandidate(candidate, "198.51.100.55", 443) == rewritten);
+        assert(opennow::sdp::PrepareGfnOfferSdp("v=0\r\na=" + candidate + "\r\n", "", "198.51.100.55", 443) ==
+            "v=0\r\na=" + rewritten + "\r\n");
+        if (std::string(address) != "0.0.0.0")
+            assert(opennow::sdp::RewriteGfnMediaCandidate(candidate, "", 0, "wss://198.51.100.55/nvst/") == candidate);
+    }
+    const std::string normalized_offer = "v=0\r\na=ice-ufrag:test\r\na=ice-pwd:test-password\r\na=fingerprint:sha-256 11:22\r\n";
+    for (const auto* offer : {
+             "v=0\na=ice-ufrag:test\na=ice-pwd:test-password\na=fingerprint:sha-256 11:22",
+             "v=0\na=ice-ufrag:test\na=ice-pwd:test-password\na=fingerprint:sha-256 11:22\n",
+             "v=0\r\na=ice-ufrag:test\r\na=ice-pwd:test-password\r\na=fingerprint:sha-256 11:22",
+             "v=0\na=ice-ufrag:test\r\na=ice-pwd:test-password\na=fingerprint:sha-256 11:22\r\n"}) {
+        assert(opennow::sdp::PrepareGfnOfferSdp(offer, "", "", 0) == normalized_offer);
+    }
+    assert(opennow::sdp::PrepareGfnOfferSdp(normalized_offer, "", "", 0) == normalized_offer);
+    assert(opennow::sdp::PrepareGfnOfferSdp("", "", "", 0).empty());
     const std::string zero_offer = "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 0.0.0.0 9 typ host";
     assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, "", "198-51-100-55.example", 443) ==
-        "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 198.51.100.55 443 typ host");
+        "v=0\r\nc=IN IP4 0.0.0.0\r\na=candidate:1 1 UDP 1 198.51.100.55 443 typ host\r\n");
     for (const auto& signaling : {"wss://198.51.100.55/nvst/", "wss://198-51-100-55.example/nvst/"}) {
         assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, signaling, "", 0) ==
-            "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 198.51.100.55 9 typ host");
+            "v=0\r\nc=IN IP4 0.0.0.0\r\na=candidate:1 1 UDP 1 198.51.100.55 9 typ host\r\n");
     }
     assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, "", "198.51.100.55", 0) ==
-        "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 198.51.100.55 9 typ host");
-    assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, "wss://unparseable.example/nvst/", "", 0) == zero_offer);
+        "v=0\r\nc=IN IP4 0.0.0.0\r\na=candidate:1 1 UDP 1 198.51.100.55 9 typ host\r\n");
+    assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, "wss://unparseable.example/nvst/", "", 0) ==
+        "v=0\r\nc=IN IP4 0.0.0.0\r\na=candidate:1 1 UDP 1 0.0.0.0 9 typ host\r\n");
     assert(opennow::sdp::RewriteGfnMediaCandidate("candidate:1 1 UDP 1 0.0.0.0 47998 typ host", "", 0,
         "wss://198-51-100-55.example/nvst/") == "candidate:1 1 UDP 1 198.51.100.55 47998 typ host");
     assert(opennow::sdp::BuildManualMediaCandidate("", "198.51.100.55", 443, 100) ==

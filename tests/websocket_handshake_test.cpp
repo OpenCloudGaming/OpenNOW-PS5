@@ -29,4 +29,13 @@ int main()
     assert(!ValidateUpgrade(status + headers + accept, expected));
     assert(!ValidateUpgrade(status + headers + " " + accept + "\r\n", expected));
     assert(!ValidateUpgrade(status + headers + "Sec-WebSocket-Accept: \r\n\r\n", ""));
+    std::string error;
+    assert(!ValidateUpgrade("HTTP/1.1 403 sensitive-session-id\r\n\r\nsensitive-token", expected, &error));
+    assert(error == "WebSocket upgrade rejected (HTTP 403)");
+    assert(!ValidateUpgrade(status + headers + "Sec-WebSocket-Accept: sensitive-token\r\n\r\n", expected, &error));
+    assert(error == "Invalid WebSocket accept challenge");
+    assert(!ValidateUpgrade(status + "\r\n", expected, &error));
+    assert(error == "WebSocket response missing Upgrade header");
+    assert(ValidateUpgrade(status + headers + accept + "\r\n", expected, &error));
+    assert(error.empty());
 }

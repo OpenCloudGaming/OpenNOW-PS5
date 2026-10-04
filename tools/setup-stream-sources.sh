@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /work
+cd "$(dirname "$0")/.."
+mkdir -p .deps
 revision=8069d3e535c2aaaac0488bd5b456809c6493282f
 archive=.deps/opennow-switch-source.tar.gz
 if [[ ! -f $archive ]]; then

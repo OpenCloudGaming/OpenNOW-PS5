@@ -33,6 +33,7 @@ ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -Wno-misleading-indentation -O1 -g 
 build/host-tests/stream-lifecycle-test
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc/stream tests/websocket_write_queue_test.cpp -o build/host-tests/websocket-queue-test
 build/host-tests/websocket-queue-test
+bash tools/test-websocket.sh
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/audio_rtp_utils_test.cpp -o build/host-tests/audio-rtp-test
 build/host-tests/audio-rtp-test

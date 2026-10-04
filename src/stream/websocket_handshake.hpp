@@ -60,14 +60,27 @@ inline bool HasHeaderToken(std::string_view value, std::string_view token)
     return false;
 }
 
-inline bool ValidateUpgrade(std::string_view response, std::string_view expected_accept)
+inline bool ValidateUpgrade(std::string_view response, std::string_view expected_accept,
+                            std::string* error = nullptr)
 {
+    const auto fail = [&](const std::string& reason) {
+        if (error) *error = reason;
+        return false;
+    };
     const size_t status_end = response.find("\r\n");
     if (status_end == std::string_view::npos)
-        return false;
+        return fail("Incomplete WebSocket HTTP response");
     const auto status = response.substr(0, status_end);
-    if (status != "HTTP/1.1 101" && !status.starts_with("HTTP/1.1 101 "))
-        return false;
+    if (status != "HTTP/1.1 101" && !status.starts_with("HTTP/1.1 101 ")) {
+        if (status.size() >= 12 &&
+            (status.starts_with("HTTP/1.1 ") || status.starts_with("HTTP/1.0 ")) &&
+            status[9] >= '1' && status[9] <= '5' &&
+            status[10] >= '0' && status[10] <= '9' &&
+            status[11] >= '0' && status[11] <= '9' &&
+            (status.size() == 12 || status[12] == ' '))
+            return fail("WebSocket upgrade rejected (HTTP " + std::string(status.substr(9, 3)) + ")");
+        return fail("Invalid WebSocket HTTP status");
+    }
 
     bool upgrade = false;
     bool connection = false;
@@ -76,14 +89,19 @@ inline bool ValidateUpgrade(std::string_view response, std::string_view expected
     while (start < response.size()) {
         const size_t end = response.find("\r\n", start);
         if (end == std::string_view::npos)
-            return false;
+            return fail("Incomplete WebSocket upgrade headers");
         const auto line = response.substr(start, end - start);
-        if (line.empty())
-            return upgrade && connection && accept;
+        if (line.empty()) {
+            if (!upgrade) return fail("WebSocket response missing Upgrade header");
+            if (!connection) return fail("WebSocket response missing Connection upgrade");
+            if (!accept) return fail("WebSocket response missing accept challenge");
+            if (error) error->clear();
+            return true;
+        }
         const size_t colon = line.find(':');
         if (colon == std::string_view::npos || colon == 0 ||
             line.front() == ' ' || line.front() == '\t')
-            return false;
+            return fail("Malformed WebSocket upgrade header");
         const auto name = line.substr(0, colon);
         const auto value = TrimHeaderWhitespace(line.substr(colon + 1));
         if (HeaderEquals(name, "Upgrade")) {
@@ -92,12 +110,12 @@ inline bool ValidateUpgrade(std::string_view response, std::string_view expected
             connection = connection || HasHeaderToken(value, "Upgrade");
         } else if (HeaderEquals(name, "Sec-WebSocket-Accept")) {
             if (accept || value != expected_accept || value.empty())
-                return false;
+                return fail("Invalid WebSocket accept challenge");
             accept = true;
         }
         start = end + 2;
     }
-    return false;
+    return fail("Incomplete WebSocket upgrade headers");
 }
 
 }

@@ -65,11 +65,13 @@ int main(){
  }
  struct NetworkCase {const char* response;const char* signaling;const char* ip;int port;};
  for(const auto& fixture:{
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.16","resourcePath":"/nvst/","port":48010}]}})","wss://203.0.113.16:443/nvst/","203.0.113.16",48010},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"wss://stream.geforcenow.com:8443/nvst/","port":48322}]}})","wss://stream.geforcenow.com:8443/nvst/","stream.geforcenow.com",48322},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"sessionControlInfo":{"ip":"control.geforcenow.com","port":443}}})","wss://control.geforcenow.com:443/nvst/","control.geforcenow.com",0},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"rtsps://203.0.113.10:48322"}]}})","wss://203.0.113.10/nvst/","203.0.113.10",48322},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":443},{"usage":14,"ip":["203.0.113.11"],"port":48322}]}})","wss://203.0.113.10:443/nvst/","203.0.113.11",48322},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"wss://explicit.geforcenow.com/nvst/","connectionInfo":[{"usage":2,"resourcePath":"udp://203.0.113.12:48010"},{"usage":17,"ip":"203.0.113.13","port":48011},{"usage":14,"ip":"203.0.113.14","port":48322}]}})","wss://explicit.geforcenow.com/nvst/","203.0.113.12",48010},
-  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"serverIp":"203.0.113.15","connectionInfo":[{"usage":14,"resourcePath":"/nvst/","port":48322}]}})","wss://203.0.113.15:48322/nvst/","203.0.113.15",48322}
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"serverIp":"203.0.113.15","connectionInfo":[{"usage":14,"resourcePath":"/nvst/","port":48322}]}})","wss://203.0.113.15:443/nvst/","203.0.113.15",48322}
  }){
   m.poll=fixture.response;c.launch("fixture-jwt","fixture-device",20);c.tick("fixture-jwt","fixture-device",23);
   assert(c.view().state==CloudState::ready);

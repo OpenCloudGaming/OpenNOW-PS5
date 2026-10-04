@@ -27,6 +27,7 @@ public:
 private:
  void fail(const char*);void release();
  void message(const std::string&);void payload(cJSON*);void send(cJSON*);
+ void sendCandidates();
  void recoverVideoLoss();
  void peerInfo();void data(const char*,std::size_t,std::uint16_t);
  static void ice(char*,void*);static void state(PeerConnectionState,void*);
@@ -36,6 +37,7 @@ private:
  Media& media_;PeerConnection* pc_=nullptr;WebSocketClient* ws_=nullptr;
  StreamSettings settings_{};Session session_{};char status_[192]{};std::string name_;int peerId_=0,remoteId_=0,ack_=0,protocol_=2;
  bool failed_=false,runtimeReady_=false,answerSent_=false,inputReady_=false;std::vector<std::string> candidates_;
+ std::string candidateMid_;int candidateMLine_=0;
  std::uint64_t nextHeartbeat_=0,started_=0,lastInput_=0;unsigned inputAttempts_=0;
  unsigned lastVideoLoss_=0;
  std::uint64_t inputOpened_=0,keyframeRequested_=0;
