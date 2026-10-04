@@ -6,15 +6,15 @@
 #include <cstdio>
 using namespace opennow;
 static Response response(const char* s){return {200,const_cast<char*>(s),std::strlen(s),nullptr};}
-struct Mock {unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody,catalogBody;const char* catalog=nullptr;};
+struct Mock {unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody,catalogBody;const char* catalog=nullptr;const char* created=nullptr;long stopStatus=200;bool stopError=false;};
 static Response request(void* p,const char* method,const char* url,const char* body,const char*,const char*) {
  auto& m=*static_cast<Mock*>(p);
  if(std::strstr(url,"serviceUrls"))return response(R"({"gfnServiceInfo":{"gfnServiceEndpoints":[{"idpId":"PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg","streamingServiceUrl":"https://test.geforcenow.com/"}]}})");
  if(std::strstr(url,"serverInfo"))return response(R"({"requestStatus":{"serverId":"GFN-PC"}})");
  if(std::strstr(url,"graphql")){m.catalogBody=body;if(m.catalog)return response(m.catalog);return response(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Fixture Game","variants":[{"id":"42","appStore":"XBOX"},{"id":"43","appStore":"STEAM"}]}]}}})");}
  if(std::strstr(url,"nettestsession")){++m.nettests;m.netBody=body;return response(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"net-fixture"}})");}
- if(!std::strcmp(method,"POST")){if(m.reject){auto r=response(R"({"requestStatus":{"statusCode":4,"statusDescription":"INTERNAL_ERROR_STATUS","unifiedErrorCode":123}})");r.status=500;return r;}++m.posts;m.body=body;return response(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":0,"queuePosition":5}})");}
- if(!std::strcmp(method,"DELETE")){++m.deletes;return response("{}");}
+ if(!std::strcmp(method,"POST")){if(m.reject){auto r=response(R"({"requestStatus":{"statusCode":4,"statusDescription":"INTERNAL_ERROR_STATUS","unifiedErrorCode":123}})");r.status=500;return r;}++m.posts;m.body=body;if(m.created)return response(m.created);return response(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":0,"queuePosition":5}})");}
+ if(!std::strcmp(method,"DELETE")){++m.deletes;auto r=response("{}");r.status=m.stopStatus;if(m.stopError)r.error="fixture network failure";return r;}
  if(m.poll)return response(m.poll);
  return response(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":2,"signalingUrl":"wss://test.geforcenow.com/nvst/"}})");
 }
@@ -57,8 +57,41 @@ int main(){
  R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"rtsp://stream.geforcenow.com:322"}]}})"}){
  m.poll=address;c.launch("fixture-jwt","fixture-device",20,27);c.tick("fixture-jwt","fixture-device",23);assert(c.view().state==CloudState::ready);assert(!std::strcmp(c.session().signaling,"wss://stream.geforcenow.com/nvst/"));assert(c.stop("fixture-jwt","fixture-device"));
  }
+ struct NetworkCase {const char* response;const char* signaling;const char* ip;int port;};
+ for(const auto& fixture:{
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"sessionControlInfo":{"ip":"control.geforcenow.com","port":443}}})","wss://control.geforcenow.com:443/nvst/","control.geforcenow.com",0},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"rtsps://203.0.113.10:48322"}]}})","wss://203.0.113.10/nvst/","203.0.113.10",48322},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":443},{"usage":14,"ip":["203.0.113.11"],"port":48322}]}})","wss://203.0.113.10:443/nvst/","203.0.113.11",48322},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"wss://explicit.geforcenow.com/nvst/","connectionInfo":[{"usage":2,"resourcePath":"udp://203.0.113.12:48010"},{"usage":17,"ip":"203.0.113.13","port":48011},{"usage":14,"ip":"203.0.113.14","port":48322}]}})","wss://explicit.geforcenow.com/nvst/","203.0.113.12",48010},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"serverIp":"203.0.113.15","connectionInfo":[{"usage":14,"resourcePath":"/nvst/","port":48322}]}})","wss://203.0.113.15:48322/nvst/","203.0.113.15",48322}
+ }){
+  m.poll=fixture.response;c.launch("fixture-jwt","fixture-device",20,27);c.tick("fixture-jwt","fixture-device",23);
+  assert(c.view().state==CloudState::ready);
+  assert(!std::strcmp(c.session().signaling,fixture.signaling));
+  assert(!std::strcmp(c.session().mediaIp,fixture.ip));
+  assert(c.session().mediaPort==fixture.port);
+  assert(c.stop("fixture-jwt","fixture-device"));
+ }
  m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2}})";c.launch("fixture-jwt","fixture-device",30,27);c.tick("fixture-jwt","fixture-device",33);assert(std::strstr(c.view().message,"no supported streaming address"));c.stop("fixture-jwt","fixture-device");
  m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":1,"seatSetupInfo":{"seatSetupStep":3}}})";c.launch("fixture-jwt","fixture-device",40,27);c.tick("fixture-jwt","fixture-device",43);assert(std::strstr(c.view().message,"setup step 3"));c.stop("fixture-jwt","fixture-device");
+ m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":6}})";
+ c.launch("fixture-jwt","fixture-device",40,27);c.tick("fixture-jwt","fixture-device",43);
+ assert(c.view().state==CloudState::queued);assert(std::strstr(c.view().message,"resuming"));
+ m.poll=nullptr;c.tick("fixture-jwt","fixture-device",46);assert(c.view().state==CloudState::ready);assert(c.stop("fixture-jwt","fixture-device"));
+ m.created=R"({"requestStatus":{"statusCode":41,"statusDescription":"APP_PATCHING_STATUS"},"session":{"sessionId":"patching-fixture","status":1}})";
+ c.launch("fixture-jwt","fixture-device",40,27);
+ assert(c.view().state==CloudState::queued);assert(!std::strcmp(c.session().id,"patching-fixture"));assert(std::strstr(c.view().message,"patching"));
+ m.created=nullptr;c.tick("fixture-jwt","fixture-device",43);assert(c.view().state==CloudState::ready);assert(c.stop("fixture-jwt","fixture-device"));
+ for(long status:{404L,410L}){
+  c.launch("fixture-jwt","fixture-device",40,27);m.stopStatus=status;
+  assert(c.stop("fixture-jwt","fixture-device"));assert(!*c.session().id);assert(c.view().state==CloudState::catalog);
+ }
+ for(bool networkError:{false,true}){
+  m.stopStatus=200;c.launch("fixture-jwt","fixture-device",40,27);m.stopStatus=networkError?200:503;m.stopError=networkError;
+  assert(!c.stop("fixture-jwt","fixture-device"));assert(!std::strcmp(c.session().id,"fixture-id"));
+  const auto posts=m.posts;c.launch("fixture-jwt","fixture-device",41,27);assert(m.posts==posts);
+  m.stopStatus=200;m.stopError=false;assert(c.stop("fixture-jwt","fixture-device"));assert(c.view().state==CloudState::catalog);
+ }
  // The allocation request and net-test must match every negotiated profile.
  for(auto profile:{StreamProfile::quality,StreamProfile::smooth,StreamProfile::experimental,StreamProfile::compatibility,StreamProfile::native_hdr120,StreamProfile::native_hdr60,StreamProfile::native_4k120,StreamProfile::native_1080,StreamProfile::native_hdr90,StreamProfile::native_4k90}){
   c.launch("fixture-jwt","fixture-device",50,27,profile);

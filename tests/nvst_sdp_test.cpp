@@ -21,6 +21,36 @@ bool HasAttribute(const std::string& sdp, const std::string& attribute)
 
 int main()
 {
+    const std::string mapped_offer =
+        "v=0\r\nc=IN IP4 0.0.0.0\r\n"
+        "a=candidate:1 1 udp 2122260223 203.0.113.10 47998 typ host\r\n";
+    const auto mapped = opennow::sdp::PrepareGfnOfferSdp(
+        mapped_offer, "wss://signaling.example/nvst/", "198.51.100.55", 443);
+    assert(mapped.find("a=candidate:1 1 udp 2122260223 198.51.100.55 443 typ host") != std::string::npos);
+    assert(mapped.find("c=IN IP4 0.0.0.0") != std::string::npos);
+    assert(opennow::sdp::PrepareGfnOfferSdp(mapped_offer, "wss://signaling.example/nvst/", "", 0) == mapped_offer);
+    assert(opennow::sdp::PrepareGfnOfferSdp(mapped_offer, "wss://signaling.example/nvst/", "198.51.100.55", 0) == mapped_offer);
+    const std::string trickled = "candidate:1 1 udp 2122260223 203.0.113.10 47998 typ host generation 0";
+    assert(opennow::sdp::RewriteGfnMediaCandidate(trickled, "198.51.100.55", 18784) ==
+        "candidate:1 1 udp 2122260223 198.51.100.55 18784 typ host generation 0");
+    assert(opennow::sdp::RewriteGfnMediaCandidate(trickled, "198.51.100.55", 65536) == trickled);
+    assert(opennow::sdp::RewriteGfnMediaCandidate("candidate:malformed", "198.51.100.55", 443) == "candidate:malformed");
+    const std::string zero_offer = "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 0.0.0.0 9 typ host";
+    assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, "", "198-51-100-55.example", 443) ==
+        "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 198.51.100.55 443 typ host");
+    for (const auto& signaling : {"wss://198.51.100.55/nvst/", "wss://198-51-100-55.example/nvst/"}) {
+        assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, signaling, "", 0) ==
+            "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 198.51.100.55 9 typ host");
+    }
+    assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, "", "198.51.100.55", 0) ==
+        "v=0\nc=IN IP4 0.0.0.0\na=candidate:1 1 UDP 1 198.51.100.55 9 typ host");
+    assert(opennow::sdp::PrepareGfnOfferSdp(zero_offer, "wss://unparseable.example/nvst/", "", 0) == zero_offer);
+    assert(opennow::sdp::RewriteGfnMediaCandidate("candidate:1 1 UDP 1 0.0.0.0 47998 typ host", "", 0,
+        "wss://198-51-100-55.example/nvst/") == "candidate:1 1 UDP 1 198.51.100.55 47998 typ host");
+    assert(opennow::sdp::BuildManualMediaCandidate("", "198.51.100.55", 443, 100) ==
+        "a=candidate:100 1 UDP 2130706431 198.51.100.55 443 typ host");
+    assert(opennow::sdp::BuildManualMediaCandidate("wss://198.51.100.55/", "", 0, 100).empty());
+
     opennow::StreamSettings settings;
     settings.width = 1280;
     settings.height = 720;
@@ -119,6 +149,7 @@ int main()
     assert(selected==opennow::StreamProfile::native_hdr120);
     const std::string hevcOffer="v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 98 100\r\na=rtpmap:98 H264/90000\r\na=rtpmap:100 H265/90000\r\na=fmtp:100 profile-id=2;level-id=156;sprop-max-don-diff=0\r\n";
     const std::string rawHevc="v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H265/90000\r\na=fmtp:96 profile-id=2;level-id=156;sprop-max-don-diff=0\r\n";
+    assert(opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,rawHevc,settings).empty());
     const auto hdrAnswer=opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,hevcOffer,hdr);
     assert(hdrAnswer.find("a=rtpmap:100 H265/90000")!=std::string::npos);
     assert(hdrAnswer.find("profile-id=2;level-id=156")!=std::string::npos);
