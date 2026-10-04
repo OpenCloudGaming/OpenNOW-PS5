@@ -8,6 +8,27 @@ The active build assets are `sce_sys/icon0.png`, `sce_sys/pic0.dds` and `sce_sys
 
 DDS format conversion uses the public [PSGFX imaging pipeline](https://github.com/elripalda/psgfx/blob/a9d73d9fea3382955476fd56ec3c74e08ea2e0ab/src/imaging.h), pinned at `a9d73d9fea3382955476fd56ec3c74e08ea2e0ab`, with stb image loading and bc7enc. The converter is a host tool and is not linked into the PS5 app. Encoded output is decoded for visual inspection and checked with `bash tools/validate-assets.sh`.
 
+## GitHub social preview
+
+`opennow-social-preview.png` is a 1280 × 640 PNG for GitHub's repository Social preview setting and the README banner. The generated 1774 × 887 source is retained as `opennow-social-preview-source.png`; the export is resized without changing the composition and has ancillary metadata removed. Its 2:1 layout uses readable project text, the alpha version and a functional-prototype label. This card is separate from the PS5 launcher background.
+
+Generated with the built-in image generation tool, using the icon as an identity reference.
+
+```text
+Use case: ads-marketing.
+Asset type: GitHub repository social preview / Open Graph card, also the top banner of the repository README. Create one polished 2:1 landscape image for exact 1280 x 640 display. This is a dedicated social card, not a console background.
+Input image 1: identity reference for the mint-and-white ON monogram only. Use the same open circular mint O with a play triangle and angular white N silhouette. Do not reproduce the reference square tile or its lower wordmark.
+Primary request: clearly introduce OpenNOW PS5, a working but unfinished independent native cloud-gaming prototype.
+Composition: left 60 percent contains a strong typographic hierarchy, right 35 percent contains the large matching ON emblem. Keep all essential text and the emblem at least 64 pixels from every edge, so social media crops cannot cut them off. Fill the wide card elegantly, without the large empty left half needed by a console launcher background.
+Background: very dark charcoal #10161C; subtle restrained mint streaming arcs and a soft green halo behind the right-hand emblem, quiet and high contrast behind the text. Clean premium graphic design, crisp typography, sparse decoration.
+Text, exactly and only:
+"OpenNOW PS5" — large bold white title on the left, visually dominant, exact capitalization and both adjacent N characters in OpenNOW.
+"Native cloud gaming on PS5" — readable light-gray subtitle below.
+"0.0.1-alpha" — compact mint-accent badge below the subtitle.
+"Functional prototype" — a small readable secondary label alongside the alpha badge.
+Constraints: a single 2:1 rectangular card, no border, no mockup, no UI, no device or controller, no PlayStation / Sony / NVIDIA marks, no additional words, no claims about HDR or 120 FPS, no watermark, no tiny illegible typography. Match the existing icon's visual identity. Opaque background.
+```
+
 ## Icon prompt
 
 ```text

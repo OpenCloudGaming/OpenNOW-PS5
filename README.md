@@ -4,9 +4,9 @@
 
 # OpenNOW PS5
 
-![OpenNOW PS5 home-screen background artwork](docs/branding/opennow-background-source.png)
+![OpenNOW PS5 — native cloud gaming, 0.0.1-alpha functional prototype](docs/branding/opennow-social-preview.png)
 
-*Original artwork for the PS5 adaptation, prepared for upcoming builds. The 0.0.1-alpha download retains its original launcher artwork. This is artwork, not a gameplay screenshot.*
+*Social preview artwork for the independent native PS5 prototype.*
 
 An experimental native PS5 homebrew client for GeForce NOW, based on the public [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) projects. Native hardware video decoding, GPU presentation, stereo audio and DualSense input are integrated.
 
