@@ -170,7 +170,7 @@ bool WebSocketClient::connect() {
             if (header_end == std::string::npos)
                 continue;
 
-            if (opennow::websocket::ValidateUpgrade(response, *expected_accept)) {
+            if (opennow::websocket::ValidateUpgrade(response, *expected_accept, &last_error_)) {
                 const size_t body_start = header_end + 4;
                 if (response.size() > body_start) {
                     rx_buffer_.insert(rx_buffer_.end(), response.begin() + body_start, response.end());
@@ -178,7 +178,6 @@ bool WebSocketClient::connect() {
                 connected_ = true;
                 return true;
             } else {
-                last_error_ = "Invalid WebSocket upgrade response";
                 break;
             }
         } else if (res == CURLE_AGAIN) {
@@ -398,11 +397,10 @@ void WebSocketClient::poll() {
                 fragmented_opcode_ = opcode;
             fragmented_message_.append(payload.begin(), payload.end());
             if (final) {
-                const bool text = fragmented_opcode_ == 1;
                 std::string message = std::move(fragmented_message_);
                 fragmented_message_.clear();
                 fragmented_opcode_ = 0;
-                if (text && on_message_)
+                if (on_message_)
                     on_message_(message);
             }
         } else if (opcode == 0x08) { // Close frame

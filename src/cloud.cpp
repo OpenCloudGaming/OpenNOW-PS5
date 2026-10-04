@@ -52,9 +52,8 @@ bool signalingAddress(char* out,std::size_t capacity,const cJSON* connection,con
         const int n=std::snprintf(out,capacity,"wss://%s/nvst/",host);
         return n>0&&static_cast<std::size_t>(n)<capacity;
     }
-    if(!port)port=443;
     if(*path&&(*path!='/'||path[1]=='/'))return false;
-    int n=std::snprintf(out,capacity,"wss://%s:%d%s",host,*path?port:443,*path?path:"/nvst/");
+    int n=std::snprintf(out,capacity,"wss://%s:443%s",host,*path?path:"/nvst/");
     return n>0&&static_cast<std::size_t>(n)<capacity;
 }
 

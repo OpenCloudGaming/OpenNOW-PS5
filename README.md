@@ -65,6 +65,8 @@ Development build `00.002.037` removes the PS5-only age dialog and follows [upst
 
 Development build `00.002.036` preserves a stream failure message after cleanup so you can retry from the catalog. If cleanup fails, use Options + touchpad to retry **STOP SESSION** before starting another game. While the app remains open, it retains the session for another cleanup attempt. Explicitly closing the app attempts cleanup but still exits if the network or credentials prevent it; the remote session may remain active.
 
+Development build `00.002.038` aligns signaling with OpenNOW's Android native branch. Relative signaling paths use secure WebSocket port 443, separate from the media port; explicit `wss://` endpoints retain their own port. The client sends Android's browser User-Agent, accepts text and binary signaling messages, preserves public ICE candidates, and sends local candidates with the negotiated BUNDLE MID. Failed upgrades report the HTTP status or failed validation check without exposing session IDs, headers, or response bodies. Certificate and WebSocket challenge validation remain enabled.
+
 For existing installations, artwork files can be cached in the registered title metadata. Use the loader's supported refresh or re-registration procedure if the home-screen icon or background remains stale. Replacing the title folder alone may not refresh the background reference.
 
 ## Privacy

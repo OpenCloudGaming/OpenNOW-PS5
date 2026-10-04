@@ -576,11 +576,19 @@ std::string RewriteGfnMediaCandidate(
         if (token == 5 && candidate.find_first_not_of("0123456789", start) < pos) return candidate;
     }
     const bool mapped_endpoint = !media_ip_hint.empty() && media_port_hint > 0;
-    if (!mapped_endpoint && candidate.substr(endpoint_start, address_end - endpoint_start) != "0.0.0.0")
-        return candidate;
-    const auto media_ip = NormalizeGfnMediaIp(media_ip_hint.empty() ? ExtractSignalingHost(signaling_url) : media_ip_hint);
+    const auto address = candidate.substr(endpoint_start, address_end - endpoint_start);
     unsigned a, b, c, d;
     char extra;
+    if (std::sscanf(address.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4 ||
+        a > 255 || b > 255 || c > 255 || d > 255)
+        return candidate;
+    const bool placeholder = a == 0 && b == 0 && c == 0 && d == 0;
+    const bool unroutable = a == 10 || a == 127 || (a == 169 && b == 254) ||
+        (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) ||
+        (a >= 224 && a <= 239) || (a == 100 && b >= 64 && b <= 127);
+    if (!placeholder && !(mapped_endpoint && unroutable))
+        return candidate;
+    const auto media_ip = NormalizeGfnMediaIp(media_ip_hint.empty() ? ExtractSignalingHost(signaling_url) : media_ip_hint);
     if (std::sscanf(media_ip.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4 ||
         a > 255 || b > 255 || c > 255 || d > 255 || media_ip == "0.0.0.0")
         return candidate;
@@ -609,17 +617,18 @@ std::string PrepareGfnOfferSdp(
     const std::string& media_ip_hint,
     int media_port_hint)
 {
+    std::string prepared;
     size_t start = 0;
     while (start < sdp.size()) {
         auto end = sdp.find('\n', start);
-        const bool newline = end != std::string::npos;
         if (end == std::string::npos) end = sdp.size();
-        const auto line = sdp.substr(start, end - start);
-        const auto rewritten = RewriteGfnMediaCandidate(line, media_ip_hint, media_port_hint, signaling_url);
-        sdp.replace(start, line.size(), rewritten);
-        start += rewritten.size() + (newline ? 1 : 0);
+        auto line = sdp.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        prepared += RewriteGfnMediaCandidate(line, media_ip_hint, media_port_hint, signaling_url);
+        prepared += "\r\n";
+        start = end + 1;
     }
-    return sdp;
+    return prepared;
 }
 
 
