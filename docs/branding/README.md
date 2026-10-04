@@ -4,7 +4,7 @@ These images were generated with the built-in image generation tool. They are ar
 
 The editable PNG masters are preserved. Operational exports only resize the icon to 512 × 512 and the background to 3840 × 2160. The generated background master is 1672 × 941; the 4K export is an upscale, not native 4K generation. Native launcher backgrounds use BC7_UNORM DX10 DDS without mipmaps. A single background is used for selection and launch.
 
-The active build assets are `sce_sys/icon0.png`, `sce_sys/pic0.dds` and `sce_sys/pic1.dds`. The previous prototype icon is preserved as `opennow-prototype-icon.png`. These changes are prepared for future builds; the existing `0.0.1-alpha` package and installed console files retain their previously verified artwork.
+The active build assets are `sce_sys/icon0.png`, `sce_sys/pic0.dds` and `sce_sys/pic1.dds`. The previous prototype icon is preserved as `opennow-prototype-icon.png`. The alpha variant adds a mint ALPHA corner ribbon for the launcher, in-app logo and README. `opennow-icon-alpha-source.png` preserves the generated edit; `opennow-icon-alpha.png` is the 512 × 512 export. `assets/logo.rgba` is its 180 × 180 RGBA runtime export. Home-screen artwork also needs the title-specific `/user/appmeta` files updated when the Shell still caches the older icon.
 
 DDS format conversion uses the public [PSGFX imaging pipeline](https://github.com/elripalda/psgfx/blob/a9d73d9fea3382955476fd56ec3c74e08ea2e0ab/src/imaging.h), pinned at `a9d73d9fea3382955476fd56ec3c74e08ea2e0ab`, with stb image loading and bc7enc. The converter is a host tool and is not linked into the PS5 app. Encoded output is decoded for visual inspection and checked with `bash tools/validate-assets.sh`.
 

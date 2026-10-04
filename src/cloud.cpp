@@ -15,7 +15,8 @@ bool put(char* out,std::size_t cap,const char* in) {if(!in||std::strlen(in)>=cap
 template<std::size_t N> bool copy(char (&out)[N],const char* in){return put(out,N,in);}
 void wipeJson(cJSON* v) {for(;v;v=v->next){if(v->valuestring)secureErase(v->valuestring,std::strlen(v->valuestring));wipeJson(v->child);}}
 struct Json {cJSON* p;explicit Json(const Response& r):p(r.body?cJSON_ParseWithLengthOpts(r.body,r.length+1,nullptr,true):nullptr){}~Json(){wipeJson(p);cJSON_Delete(p);}};
-const char* query=R"(query GetSearchFilterResults($vpcId:String!,$locale:String!,$fetchCount:Int!,$cursor:String!,$searchString:String!,$filters:AppFilterFields!){apps(vpcId:$vpcId,language:$locale,orderBy:"itemMetadata.relevance:DESC,sortName:ASC",first:$fetchCount,after:$cursor,searchQuery:$searchString,filters:$filters){pageInfo{hasNextPage endCursor}items{id title variants{id appStore gfn{status}}}}})";
+const char* searchQuery=R"(query GetSearchFilterResults($vpcId:String!,$locale:String!,$fetchCount:Int!,$cursor:String!,$searchString:String!,$filters:AppFilterFields!){apps(vpcId:$vpcId,language:$locale,orderBy:"itemMetadata.relevance:DESC,sortName:ASC",first:$fetchCount,after:$cursor,searchQuery:$searchString,filters:$filters){pageInfo{hasNextPage endCursor}items{id title variants{id appStore gfn{status}}}}})";
+const char* browseQuery=R"(query GetFilterBrowseResults($vpcId:String!,$locale:String!,$fetchCount:Int!,$cursor:String!,$filters:AppFilterFields!){apps(vpcId:$vpcId,language:$locale,orderBy:"itemMetadata.relevance:DESC,sortName:ASC",first:$fetchCount,after:$cursor,filters:$filters){pageInfo{hasNextPage endCursor}items{id title variants{id appStore gfn{status}}}}})";
 bool safeId(const char* s) {if(!*s)return false;for(;*s;++s)if(!((*s>='a'&&*s<='z')||(*s>='A'&&*s<='Z')||(*s>='0'&&*s<='9')||*s=='-'||*s=='_'))return false;return true;}
 bool signalingAddress(char* out,std::size_t capacity,const cJSON* connection) {
     const char* path=str(connection,"resourcePath");
@@ -91,7 +92,8 @@ void Cloud::load(const char* jwt,const char* device,const char* search,bool next
         if(!copy(vpc_,str(obj(info.p,"requestStatus"),"serverId"))||!*vpc_)copy(vpc_,"GFN-PC");
     }
     auto* root=cJSON_CreateObject();auto* vars=cJSON_AddObjectToObject(root,"variables");
-    cJSON_AddStringToObject(root,"query",query);cJSON_AddStringToObject(vars,"vpcId",vpc_);cJSON_AddStringToObject(vars,"locale","en_US");cJSON_AddNumberToObject(vars,"fetchCount",20);cJSON_AddStringToObject(vars,"cursor",cursor_);cJSON_AddStringToObject(vars,"searchString",search_);cJSON_AddObjectToObject(vars,"filters");
+    // NVIDIA rejects searchQuery when it is empty; browsing uses its own operation.
+    cJSON_AddStringToObject(root,"query",*search_?searchQuery:browseQuery);cJSON_AddStringToObject(vars,"vpcId",vpc_);cJSON_AddStringToObject(vars,"locale","en_US");cJSON_AddNumberToObject(vars,"fetchCount",20);cJSON_AddStringToObject(vars,"cursor",cursor_);if(*search_)cJSON_AddStringToObject(vars,"searchString",search_);cJSON_AddObjectToObject(vars,"filters");
     char* body=cJSON_PrintUnformatted(root);cJSON_Delete(root);if(!body){fail("Out of memory");return;}
     auto r=request_(context_,"POST","https://games.geforce.com/graphql",body,jwt,device);cJSON_free(body);
     if(r.error){fail(r.error);return;}

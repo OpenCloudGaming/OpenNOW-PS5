@@ -268,3 +268,18 @@ preserved locally and in a console rollback directory. All 31 staged and activat
 files were read back and SHA-256 verified in confirmed raw SELF mode. Fresh sign-in,
 relaunch, full console reboot and subsequent update acceptance remain unverified. The
 historical .026 streaming measurements do not establish new .027 performance results.
+
+## 0.0.3-alpha catalog, controls and artwork
+
+Native `00.002.030` fixes empty-search HTTP 400 responses, removes the startup
+Minecraft filter and adds controller-operated search with pagination. L1+R1 signs
+out; Circle in the menu closes the application without deleting the account cache.
+The revised close path stops the worker and render loop before requesting system
+exit from the main thread; console acceptance of that path is pending.
+
+The GPU build/import audit and synthetic host regressions passed. All 32 console
+package files were hash-verified with a complete rollback tree. The user confirmed
+the ALPHA launcher icon after reboot and the home-screen background without a
+further reboot once its missing registered background references were repaired.
+That title-specific repair is private and is not included in the release package.
+No new streaming performance or HDR acceptance is claimed.

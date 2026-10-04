@@ -7,6 +7,7 @@ namespace opennow::gpu {
 // All GL and VideoOut operations belong to the main presentation thread.
 bool initialize() noexcept;
 bool available() noexcept;
+void shutdown() noexcept;
 bool profileAvailable(StreamProfile) noexcept;
 StreamProfile bestProfile() noexcept;
 bool drawVideo(const video::NativeSurface&,const video::NativeMode&) noexcept;

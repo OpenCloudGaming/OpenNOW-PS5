@@ -5,6 +5,7 @@
 #include "http.hpp"
 #include "random.hpp"
 #include "cloud.hpp"
+#include "catalog_search.hpp"
 #include "stream/native/gpu_presenter.hpp"
 #ifndef OPENNOW_HOST_PREVIEW
 #include "stream/stream.hpp"
@@ -21,6 +22,9 @@ int sceUserServiceGetInitialUser(int*);
 int sceNetInit();
 int sceKernelUsleep(unsigned);
 unsigned long long sceKernelGetProcessTime();
+int sceSystemServiceLoadExec(const char*,const char**);
+int scePthreadJoin(void*,void**);
+int scePadClose(int);
 int scePthreadCreate(void**,const void*,void* (*)(void*),void*,const char*);
 int scePthreadAttrInit(void**);
 int scePthreadAttrSetstacksize(void**,std::size_t);
@@ -41,6 +45,8 @@ std::atomic_int command{0};
 opennow::Http* activeHttp=nullptr; // Set before UI loop; lifetime is the process.
 int pad=-1;
 unsigned lastButtons=0;
+opennow::CatalogSearch searchInput;
+char pendingSearch[128]{};
 void publish(const opennow::View& v) {
     pthread_mutex_lock(&viewMutex); published=v; pthread_mutex_unlock(&viewMutex);
 }
@@ -73,6 +79,15 @@ void* worker(void*) {
 #endif
     for (;;) {
         const int action=command.exchange(0);
+        if(action==10||action==11) {
+            http.cancelled.store(false);
+#ifndef OPENNOW_HOST_PREVIEW
+            stream.stop();
+#endif
+            if(*cloud.session().id)cloud.stop(login.cloudToken(),id);
+            if(action==10){ps5::demo::requestStop();return nullptr;}
+            login.cancel();cloud.reset();catalogLoaded=false;streamAttempted=false;
+        }
         if (action==2) {
             http.cancelled.store(false);
 #ifndef OPENNOW_HOST_PREVIEW
@@ -97,7 +112,7 @@ void* worker(void*) {
         login.tick(now/1000000);
 #endif
         if(login.view().state==State::authenticated) {
-            if(!catalogLoaded){publish(login.view());pthread_mutex_lock(&viewMutex);publishedCloud.state=opennow::CloudState::loading;std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Loading NVIDIA catalog...");pthread_mutex_unlock(&viewMutex);cloud.load(login.cloudToken(),id,"Minecraft");catalogLoaded=true;}
+            if(!catalogLoaded){publish(login.view());pthread_mutex_lock(&viewMutex);publishedCloud.state=opennow::CloudState::loading;std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Loading NVIDIA catalog...");pthread_mutex_unlock(&viewMutex);cloud.load(login.cloudToken(),id,"");catalogLoaded=true;}
             if(action==9&&cloud.view().state==opennow::CloudState::catalog) {
                 do {profile=opennow::nextProfile(profile);} while(opennow::settingsFor(profile).hardware&&!opennow::gpu::profileAvailable(profile));
             }
@@ -114,7 +129,11 @@ void* worker(void*) {
             }
             if(action==6)cloud.load(login.cloudToken(),id,"",false);
             if(action==7&&cloud.view().hasNext)cloud.load(login.cloudToken(),id,"",true);
-            if(action==8)cloud.load(login.cloudToken(),id,"Minecraft",false);
+            if(action==8){
+                char search[128];
+                pthread_mutex_lock(&viewMutex);std::memcpy(search,pendingSearch,sizeof(search));pthread_mutex_unlock(&viewMutex);
+                cloud.load(login.cloudToken(),id,search,false);
+            }
             cloud.tick(login.cloudToken(),id,now/1000000);
 #ifndef OPENNOW_HOST_PREVIEW
             if(cloud.view().state==opennow::CloudState::ready&&!streamAttempted){streamAttempted=true;stream.start(cloud.session(),id);}
@@ -148,7 +167,35 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     } else lastButtons=0;
     opennow::View v;opennow::CloudView cv;bool streaming=false;opennow::StreamProfile profile;
     pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;publishedPad=data;streaming=publishedStream;profile=publishedProfile;pthread_mutex_unlock(&viewMutex);
-    if (((!streaming&&(pressed&PS5_PAD_BUTTON_CIRCLE))||(streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD))) && activeHttp) {
+    static bool searchWasOpen=false;
+    bool searchChanged=searchWasOpen;
+    if(v.state!=State::authenticated||streaming)searchInput.open=false;
+    if(searchInput.open) {
+        if(pressed&PS5_PAD_BUTTON_LEFT)searchInput.move(-1,0);
+        if(pressed&PS5_PAD_BUTTON_RIGHT)searchInput.move(1,0);
+        if(pressed&PS5_PAD_BUTTON_UP)searchInput.move(0,-1);
+        if(pressed&PS5_PAD_BUTTON_DOWN)searchInput.move(0,1);
+        if(pressed&PS5_PAD_BUTTON_CROSS)searchInput.append();
+        if(pressed&PS5_PAD_BUTTON_SQUARE)searchInput.erase();
+        if(pressed&PS5_PAD_BUTTON_TRIANGLE)searchInput.text[0]=0;
+        if(pressed&PS5_PAD_BUTTON_CIRCLE)searchInput.open=false;
+        else if(pressed&PS5_PAD_BUTTON_OPTIONS) {
+            pthread_mutex_lock(&viewMutex);std::memcpy(pendingSearch,searchInput.text,sizeof(pendingSearch));pthread_mutex_unlock(&viewMutex);
+            command.store(8);searchInput.open=false;
+        }
+        searchChanged=true;
+        pressed=0;
+    } else if(v.state==State::authenticated&&!streaming&&(pressed&PS5_PAD_BUTTON_TRIANGLE)) {
+        searchInput.open=true;searchChanged=true;pressed=0;
+    }
+    searchWasOpen=searchInput.open;
+    const unsigned signOutButtons=PS5_PAD_BUTTON_L1|PS5_PAD_BUTTON_R1;
+    if(!streaming&&(pressed&PS5_PAD_BUTTON_CIRCLE)&&activeHttp) {
+        activeHttp->cancelled.store(true);command.store(10);pressed=0;
+    } else if(!streaming&&v.state==State::authenticated&&
+        (data.buttons&signOutButtons)==signOutButtons&&(pressed&signOutButtons)&&activeHttp) {
+        activeHttp->cancelled.store(true);command.store(11);pressed=0;
+    } else if (streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD) && activeHttp) {
         activeHttp->cancelled.store(true); command.store(2);
     } else if (!streaming && (pressed&PS5_PAD_BUTTON_CROSS) && v.state!=State::waiting && v.state!=State::requesting && v.state!=State::authenticated) command.store(1);
     if(v.state==State::authenticated&&!streaming) {
@@ -158,7 +205,6 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         if(pressed&PS5_PAD_BUTTON_CROSS)command.store(5);
         if(pressed&PS5_PAD_BUTTON_SQUARE)command.store(6);
         if(pressed&PS5_PAD_BUTTON_R1)command.store(7);
-        if(pressed&PS5_PAD_BUTTON_TRIANGLE)command.store(8);
     }
 #ifndef OPENNOW_HOST_PREVIEW
     if(streaming&&media.frames.load())return media.draw(c);
@@ -167,10 +213,26 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     static opennow::View previous;
     static auto previousProfile=opennow::StreamProfile::quality;
     static bool first=true;
-    if (!first && std::memcmp(&previous,&v,sizeof(v))==0&&std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&previousProfile==profile) return false;
+    if (!first && !searchChanged && !searchInput.open && std::memcmp(&previous,&v,sizeof(v))==0&&std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&previousProfile==profile) return false;
     first=false; previous=v;previousCloud=cv;previousProfile=profile;
     const auto bg=static_cast<Color>(0xff1c1610), green=static_cast<Color>(0xff9ee656);
     c.clear(bg);
+    static std::uint32_t logo[180*180]{};
+    static bool logoChecked=false,logoLoaded=false;
+    if(!logoChecked) {
+        logoChecked=true;
+        if(FILE* file=std::fopen("/app0/assets/logo.rgba","rb")) {
+            logoLoaded=std::fread(logo,1,sizeof(logo),file)==sizeof(logo)&&std::fgetc(file)==EOF;
+            std::fclose(file);
+        }
+#ifdef OPENNOW_HOST_PREVIEW
+        if(!logoLoaded)if(FILE* file=std::fopen("assets/logo.rgba","rb")) {
+            logoLoaded=std::fread(logo,1,sizeof(logo),file)==sizeof(logo)&&std::fgetc(file)==EOF;
+            std::fclose(file);
+        }
+#endif
+    }
+    if(logoLoaded)c.image(1620,60,180,180,logo);
     c.text(100,80,"OPENNOW",12,Color::white);
     c.text(105,205,"PS5 CLOUD GAMING - DEVELOPMENT",4,green);
     c.rectangle(100,280,1720,4,green);
@@ -197,25 +259,46 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         }
     } else if (v.state==State::authenticated) {
         if(cv.state==opennow::CloudState::catalog){
+            char position[160];
+            std::snprintf(position,sizeof(position),"UP/DOWN SELECT | %u/%u STORE ENTRIES | %s",
+                cv.count?cv.selected+1:0,cv.count,
+                cv.hasNext?"R1 NEXT CATALOG PAGE":"LAST CATALOG PAGE");
+            c.text(100,445,position,3,green);
             unsigned page=cv.selected/7*7;
             for(unsigned i=page;i<cv.count&&i<page+7;++i){char line[256];std::snprintf(line,sizeof(line),"%s %.52s / %s",i==cv.selected?">":" ",cv.games[i].title,cv.games[i].store);c.text(100,490+(i-page)*52,line,3,i==cv.selected?green:Color::white);}
-        } else c.text(100,570,"CIRCLE  STOP SESSION / BACK",4,green);
+        } else c.text(100,570,"CIRCLE CLOSE | L1+R1 SIGN OUT",4,green);
 
     }
     if(v.state==State::authenticated){
         char quality[128];std::snprintf(quality,sizeof(quality),"L1 QUALITY: %s",opennow::profileLabel(profile));
         c.text(100,855,quality,3,green);
     }
-    c.text(100,905,v.state==State::authenticated?"CROSS PLAY  SQUARE CATALOG  TRIANGLE MINECRAFT  R1 NEXT  CIRCLE SIGN OUT":"CROSS SIGN IN  CIRCLE CANCEL",3,Color::white);
+    c.text(100,905,v.state==State::authenticated?"CROSS PLAY | SQUARE CATALOG | TRIANGLE SEARCH | R1 NEXT":"CROSS SIGN IN | CIRCLE CLOSE",3,Color::white);
 #ifndef OPENNOW_HOST_PREVIEW
     c.text(100,955,opennow::gpu::outputLabel(),3,green);
 #else
     c.text(100,955,"SDR / STEREO",3,green);
 #endif
     c.text(100,995,v.state==State::authenticated ?
-        (v.sessionSaved ? "ACCOUNT SAVED - CLOSE WITH THE PS MENU" :
-            "ACCOUNT NOT SAVED - CLOSE WITH THE PS MENU") :
+        (v.sessionSaved ? "ACCOUNT SAVED | CIRCLE CLOSE | L1+R1 SIGN OUT" :
+            "ACCOUNT NOT SAVED | CIRCLE CLOSE | L1+R1 SIGN OUT") :
         "UNOFFICIAL CLIENT - CLOSE WITH THE PS MENU",3,green);
+    if(searchInput.open) {
+        c.rectangle(80,300,1760,650,bg);
+        c.text(100,320,"SEARCH CATALOG",5,green);
+        const std::string_view searchText(*searchInput.text?searchInput.text:"ENTER A GAME TITLE");
+        c.text(100,385,searchText.substr(0,65),3,Color::white);
+        if(searchText.size()>65)c.text(100,425,searchText.substr(65),3,Color::white);
+        for(unsigned i=0;i<40;++i) {
+            char key[2]{opennow::CatalogSearch::keys[i],0};
+            if(key[0]==' ')key[0]='_';
+            const unsigned x=120+(i%10)*145,y=475+(i/10)*75;
+            if(i==searchInput.selected)c.rectangle(x-10,y-10,55,50,green);
+            c.text(x,y,key,4,i==searchInput.selected?bg:Color::white);
+        }
+        c.text(100,800,"D-PAD MOVE | CROSS TYPE | SQUARE BACKSPACE | TRIANGLE CLEAR",3,Color::white);
+        c.text(100,860,"OPTIONS SEARCH | CIRCLE CANCEL | _ = SPACE",3,green);
+    }
     return true;
 }
 }
@@ -233,6 +316,7 @@ int main() {
         std::snprintf(publishedCloud.games[0].title,sizeof(publishedCloud.games[0].title),"Example Game");std::snprintf(publishedCloud.games[0].store,sizeof(publishedCloud.games[0].store),"XBOX");
         std::snprintf(publishedCloud.games[1].title,sizeof(publishedCloud.games[1].title),"Example Game");std::snprintf(publishedCloud.games[1].store,sizeof(publishedCloud.games[1].store),"STEAM");
     }
+    if(std::getenv("OPENNOW_PREVIEW_SEARCH"))searchInput.open=true;
     ps5::demo::run(draw,"Host preview - fixture data");
 #else
     opennow::gpu::initialize();
@@ -252,5 +336,12 @@ int main() {
         std::snprintf(published.message,sizeof(published.message),"Could not start networking worker");
     }
     ps5::demo::run(draw,"OpenNOW PS5 prototype");
+    if(threadResult==0)(void)scePthreadJoin(thread,nullptr);
+    opennow::gpu::shutdown();
+    if(pad>=0)(void)scePadClose(pad);
+    delete activeHttp;activeHttp=nullptr;
+    (void)sceSystemServiceLoadExec("exit",nullptr);
+    // Do not return through the native C runtime if the system rejects exit.
+    for(;;)sceKernelUsleep(1000000);
 #endif
 }

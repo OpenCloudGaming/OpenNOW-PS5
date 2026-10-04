@@ -6,12 +6,12 @@
 #include <cstdio>
 using namespace opennow;
 static Response response(const char* s){return {200,const_cast<char*>(s),std::strlen(s),nullptr};}
-struct Mock {unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody;};
+struct Mock {unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody,catalogBody;const char* catalog=nullptr;};
 static Response request(void* p,const char* method,const char* url,const char* body,const char*,const char*) {
  auto& m=*static_cast<Mock*>(p);
  if(std::strstr(url,"serviceUrls"))return response(R"({"gfnServiceInfo":{"gfnServiceEndpoints":[{"idpId":"PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg","streamingServiceUrl":"https://test.geforcenow.com/"}]}})");
  if(std::strstr(url,"serverInfo"))return response(R"({"requestStatus":{"serverId":"GFN-PC"}})");
- if(std::strstr(url,"graphql"))return response(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Fixture Game","variants":[{"id":"42","appStore":"XBOX"},{"id":"43","appStore":"STEAM"}]}]}}})");
+ if(std::strstr(url,"graphql")){m.catalogBody=body;if(m.catalog)return response(m.catalog);return response(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Fixture Game","variants":[{"id":"42","appStore":"XBOX"},{"id":"43","appStore":"STEAM"}]}]}}})");}
  if(std::strstr(url,"nettestsession")){++m.nettests;m.netBody=body;return response(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"net-fixture"}})");}
  if(!std::strcmp(method,"POST")){if(m.reject){auto r=response(R"({"requestStatus":{"statusCode":4,"statusDescription":"INTERNAL_ERROR_STATUS","unifiedErrorCode":123}})");r.status=500;return r;}++m.posts;m.body=body;return response(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":0,"queuePosition":5}})");}
  if(!std::strcmp(method,"DELETE")){++m.deletes;return response("{}");}
@@ -25,6 +25,27 @@ int main(){
  assert(!parseCatalog(response(R"({"data":{"apps":{"items":[]}}})"),view,cursor,sizeof(cursor)));
  assert(!parseCatalog(response(R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":""},"items":[]}}})"),view,cursor,sizeof(cursor)));
  Mock m;Cloud c(request,&m);c.load("fixture-jwt","fixture-device","Fixture");assert(c.view().count==2);assert(!std::strcmp(c.view().games[0].store,"XBOX"));
+ // Square browses without sending an empty searchQuery, including subsequent pages.
+ auto checkCatalog=[&](bool search,const char* expectedCursor){
+  auto* root=cJSON_Parse(m.catalogBody.c_str());assert(root);
+  const char* query=cJSON_GetObjectItemCaseSensitive(root,"query")->valuestring;
+  assert((std::strstr(query,"searchQuery:")!=nullptr)==search);
+  auto* vars=cJSON_GetObjectItemCaseSensitive(root,"variables");
+  auto* text=cJSON_GetObjectItemCaseSensitive(vars,"searchString");
+  if(search){assert(cJSON_IsString(text));assert(!std::strcmp(text->valuestring,"Fixture"));}
+  else assert(!text);
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(vars,"cursor")->valuestring,expectedCursor));
+  cJSON_Delete(root);
+ };
+ checkCatalog(true,"");
+ m.catalog=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"page-2"},"items":[]}}})";
+ c.load("fixture-jwt","fixture-device","");assert(c.view().state==CloudState::catalog&&c.view().hasNext);checkCatalog(false,"");
+ m.catalog=nullptr;
+ c.load("fixture-jwt","fixture-device","",true);assert(c.view().count==2);checkCatalog(false,"page-2");
+ m.catalog=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"search-page-2"},"items":[]}}})";
+ c.load("fixture-jwt","fixture-device","Fixture");checkCatalog(true,"");
+ m.catalog=nullptr;
+ c.load("fixture-jwt","fixture-device","",true);assert(c.view().count==2);checkCatalog(true,"search-page-2");
  c.launch("fixture-jwt","fixture-device",9,-1);assert(m.posts==0&&m.nettests==0);c.stop("fixture-jwt","fixture-device");
  c.select(1);c.launch("fixture-jwt","fixture-device",10,27);assert(m.posts==1&&c.view().state==CloudState::queued);assert(m.body.find("\"cmsId\":\"43\"")!=std::string::npos);assert(m.body.find("\"bitDepth\":0")!=std::string::npos);
  assert(m.body.find("\"userAge\":27")!=std::string::npos);assert(m.nettests==1);assert(m.body.find("\"networkTestSessionId\":\"net-fixture\"")!=std::string::npos);

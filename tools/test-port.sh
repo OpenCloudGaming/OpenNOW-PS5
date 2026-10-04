@@ -17,6 +17,9 @@ ${CC:-cc} -Wall -Wextra -Werror -fsanitize=address,undefined tests/inet_pton_tes
 build/host-tests/inet-pton-test
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/cloud_test.cpp src/cloud.cpp src/gfn.cpp build/host-tests/cJSON.o -o build/host-tests/cloud-test
+
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/catalog_search_test.cpp -o build/host-tests/catalog-search-test
+build/host-tests/catalog-search-test
 build/host-tests/cloud-test
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/nvst_sdp_test.cpp src/stream/nvst_sdp.cpp src/stream/sdp.cpp -o build/host-tests/nvst-sdp-test

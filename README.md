@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/branding/opennow-icon.png" width="144" height="144" alt="OpenNOW PS5 app icon" />
+  <img src="docs/branding/opennow-icon-alpha.png" width="144" height="144" alt="OpenNOW PS5 alpha app icon" />
 </p>
 
 # OpenNOW PS5
@@ -12,7 +12,7 @@ An experimental native PS5 homebrew client for GeForce NOW, based on the public 
 
 **This is a working, console-tested prototype, not a finished application.** You can sign in, launch a game and play. The interface is still rough and primarily exists to test that authentication, streaming, audio, video and controls work together. Expect an incomplete user experience, limited navigation and functionality that still needs further testing.
 
-**Latest prerelease: [0.0.2-alpha](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.2-alpha)** — development build `00.002.027`, title ID `PPSA99082`, with persistent NVIDIA login. This project is unofficial and unaffiliated with Sony or NVIDIA.
+**Latest prerelease: [0.0.3-alpha](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.3-alpha)** — development build `00.002.030`, title ID `PPSA99082`, with catalogue search, persistent NVIDIA login and alpha artwork. This project is unofficial and unaffiliated with Sony or NVIDIA.
 
 ## What works
 
@@ -26,7 +26,7 @@ In the latest console test, a 3840 × 2160 Main10 SDR stream was received, decod
 
 ## Prototype limitations
 
-- **The UI is a test interface.** It is not polished, feature-complete or representative of the final experience. Catalog navigation and the Minecraft search shortcut are intentionally basic.
+- **The UI is a test interface.** It is not polished, feature-complete or representative of the final experience. Catalog navigation and the controller-driven search keyboard are intentionally basic.
 - **Real 120 FPS and HDR game streaming are not yet validated.** The tested game supplied SDR despite an HDR request. Startup fixture tests passed 4K, 119.88 Hz output and HDR scanout; these checks do not establish sustained game FPS or HDR source content.
 - The 90 FPS profiles are requests; earlier tests received 60 FPS. Server behavior can differ from the selected target.
 - The deeper pipeline currently applies to qualified UHD Main10. H.264 remains at depth one and does not inherit its measured throughput improvement.
@@ -36,12 +36,12 @@ Performance may differ by game, server, network, display and profile. Requested 
 
 ## Install the alpha
 
-1. Download `OpenNOW-PS5-0.0.2-alpha.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
+1. Download `OpenNOW-PS5-0.0.3-alpha.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
 2. Verify the ZIP against its entry in `SHA256SUMS` using `shasum -a 256` or `sha256sum`. If you download every listed asset, you can use `shasum -a 256 -c SHA256SUMS`.
 3. Extract the archive. Install the included `PPSA99082` folder through a compatible native homebrew directory loader, such as ShadowMountPlus. Follow your loader's registration procedure and check that this title ID is unused.
 4. Before replacing an existing installation, close OpenNOW completely and retain a backup of its title folder.
 5. Create `/data/opennow/launch-age.txt` containing your age as an integer from 0 to 120. This personal configuration is required for session requests and is excluded from the release.
-6. Open the app and authenticate using NVIDIA's device authorization page shown on screen. Check that `ACCOUNT SAVED` appears. Close through the PS menu to retain the login; Circle from the catalog signs out and removes it.
+6. Open the app and authenticate using NVIDIA's device authorization page shown on screen. Check that `ACCOUNT SAVED` appears. Circle in the menu closes the app while preserving the saved login; L1+R1 together signs out and removes it.
 
 Requires a PS5 environment that can run native homebrew titles, a GeForce NOW account with suitable streaming capabilities, and a compatible display for the requested mode. The package has been tested in one homebrew console environment; compatibility with other firmware/loader combinations is unverified. This is a directory package, not a retail PS5 store application or a PKG installer.
 
@@ -53,14 +53,19 @@ Requires a PS5 environment that can run native homebrew titles, a GeForce NOW ac
 | D-pad | Select a game/store |
 | L1 | Cycle available stream profiles before launch |
 | Square | Load the catalog |
-| Triangle | Search Minecraft |
+| Triangle | Open the catalog search keyboard |
 | R1 | Load the next catalog page |
-| Circle | Cancel the session or sign out |
+| Circle | Close the app from the menu; cancel text entry in the search keyboard |
+| L1+R1 together | Sign out and remove the saved login |
 | Options + touchpad | Stop gameplay streaming |
+
+In the search keyboard, use the D-pad to select a character and Cross to type it. Square deletes a character, Triangle clears the text, Options submits the search and Circle cancels. R1 advances through search results; Square in the catalog returns to the full catalog.
+
+For existing installations, artwork files can be cached in the registered title metadata. Use the loader's supported refresh or re-registration procedure if the home-screen icon or background remains stale. Replacing the title folder alone may not refresh the background reference.
 
 ## Privacy
 
-NVIDIA login credentials and the device identity are saved in `/data/opennow/account.bin`, outside the installed title, so closing the app, rebooting the PS5 and replacing the app preserve the login. The app restores and renews the saved login automatically; temporary network failures keep the saved credentials and retry. CIRCLE in the catalog signs out and removes the saved login; stopping a game session keeps it. NVIDIA can still require a new sign-in if the renewal credentials expire or are revoked. The UI reports `ACCOUNT SAVED` or `ACCOUNT NOT SAVED`. The file uses owner-only permissions and contains sensitive credentials without encryption; keep it private.
+NVIDIA login credentials and the device identity are saved in `/data/opennow/account.bin`, outside the installed title, so closing the app, rebooting the PS5 and replacing the app preserve the login. The app restores and renews the saved login automatically; temporary network failures keep the saved credentials and retry. L1+R1 together in the menu signs out and removes the saved login; closing with Circle or stopping a game session keeps it. NVIDIA can still require a new sign-in if the renewal credentials expire or are revoked. The UI reports `ACCOUNT SAVED` or `ACCOUNT NOT SAVED`. The file uses owner-only permissions and contains sensitive credentials without encryption; keep it private.
 
 Public source and packages exclude local configuration, account data, session logs, console dumps and captured gameplay. Private bounded diagnostics can be written under `/data/opennow`; an explicit local marker enables a short video capture for troubleshooting. Do not upload that directory when reporting an issue.
 
@@ -91,6 +96,6 @@ Generated packages are written to `dist/`. CI checks host behavior; it does not 
 
 The PS5 platform, decoder and GPU work also builds on public projects including ProsperoLight, the PS5 hardware video research, Kodi PS5, ps5-opengl and the native application boilerplate. Their specific roles, licenses and source revisions are retained in the third-party notices and source headers.
 
-See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.1-alpha.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
+See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.3-alpha.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
 
 The combined native application is **GPL-3.0-or-later**. Third-party components retain their notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), `licenses/` and source headers. Exact upstream revisions and hashes are recorded in [upstream-lock.json](upstream-lock.json). Public dependency retrieval/build scripts and local GPU modifications are included; no captured game content is distributed.

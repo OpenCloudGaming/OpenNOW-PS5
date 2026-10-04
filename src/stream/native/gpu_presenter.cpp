@@ -173,6 +173,18 @@ bool initialize() noexcept {
  }
  window=EGL_NO_SURFACE;context=EGL_NO_CONTEXT;display=EGL_NO_DISPLAY;return false;
 }
+void shutdown() noexcept {
+ if(display==EGL_NO_DISPLAY)return;
+ if(context!=EGL_NO_CONTEXT){
+  glFinish();glDeleteTextures(1,&uiTexture);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);
+ }
+ ready=false;
+ eglMakeCurrent(display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
+ if(window!=EGL_NO_SURFACE)eglDestroySurface(display,window);
+ if(context!=EGL_NO_CONTEXT)eglDestroyContext(display,context);
+ eglTerminate(display);
+ window=EGL_NO_SURFACE;context=EGL_NO_CONTEXT;display=EGL_NO_DISPLAY;
+}
 bool available() noexcept{return ready;}
 bool profileAvailable(StreamProfile p) noexcept{const unsigned index=static_cast<unsigned>(p);return index<static_cast<unsigned>(StreamProfile::count)&&qualified[index];}
 StreamProfile bestProfile() noexcept{for(auto p:{StreamProfile::native_hdr120,StreamProfile::native_hdr90,StreamProfile::native_hdr60,StreamProfile::native_4k120,StreamProfile::native_4k90,StreamProfile::native_1080})if(profileAvailable(p))return p;return StreamProfile::quality;}
@@ -204,6 +216,7 @@ const char* outputLabel() noexcept{return label;}
 #else
 namespace opennow::gpu {
 bool initialize() noexcept{return false;}bool available() noexcept{return false;}
+void shutdown() noexcept{}
 bool profileAvailable(StreamProfile) noexcept{return false;}StreamProfile bestProfile() noexcept{return StreamProfile::quality;}
 bool drawVideo(const video::NativeSurface&,const video::NativeMode&) noexcept{return false;}
 void drawInterface(const std::uint32_t*) noexcept{}bool swap() noexcept{return false;}

@@ -14,6 +14,7 @@
 #include <sys/event.h>
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstddef>
@@ -49,6 +50,8 @@ extern "C"
 }
 
 extern "C" {
+int sceKernelDeleteEqueue(struct kevent*);
+int sceVideoOutClose(int);
 int sceKernelCreateEqueue(struct kevent**,const char*);
 int sceKernelWaitEqueue(struct kevent*,struct kevent*,int,int*,unsigned*);
 int sceVideoOutAddFlipEvent(struct kevent*,int,void*);
@@ -57,6 +60,7 @@ namespace ps5::demo
 {
 namespace
 {
+std::atomic_bool stopRequested{false};
 constexpr unsigned frame_width = 1920;
 constexpr unsigned frame_height = 1080;
 constexpr std::size_t frame_bytes = 0x1000000;
@@ -102,7 +106,7 @@ struct Glyph
     std::array<std::uint8_t, 7> rows;
 };
 
-constexpr std::array<Glyph, 73> glyphs{{
+constexpr std::array<Glyph, 75> glyphs{{
     {' ', {0, 0, 0, 0, 0, 0, 0}},        {'0', {14, 17, 19, 21, 25, 17, 14}},
     {'1', {4, 12, 4, 4, 4, 4, 14}},      {'2', {14, 17, 1, 2, 4, 8, 31}},
     {'3', {30, 1, 1, 14, 1, 1, 30}},     {'4', {2, 6, 10, 18, 31, 2, 2}},
@@ -158,6 +162,8 @@ constexpr std::array<Glyph, 73> glyphs{{
     {'&', {12,18,20,8,21,18,13}},
     {'(', {2,4,8,8,8,4,2}},
     {')', {8,4,2,2,2,4,8}},
+    {'+', {0,4,4,31,4,4,0}},
+    {'|', {4,4,4,4,4,4,4}},
 }};
 
 class File final
@@ -441,7 +447,9 @@ void read_asset_text(const char *path, std::span<char> destination,
     destination[length] = '\0';
 }
 
-[[noreturn]] void run(DrawScene draw, std::string_view ready_message) noexcept
+void requestStop() noexcept {stopRequested.store(true);}
+
+void run(DrawScene draw, std::string_view ready_message) noexcept
 {
 #ifdef OPENNOW_HOST_PREVIEW
     auto* pixels=static_cast<std::uint32_t*>(std::calloc(frame_bytes,1));
@@ -464,12 +472,14 @@ void read_asset_text(const char *path, std::span<char> destination,
         if(!pixels)halt("OpenNOW: UI allocation failed");
         Canvas canvas(pixels);
         (void)sceSystemServiceHideSplashScreen();
-        for(;;) {
+        while(!stopRequested.load()) {
             if(draw(canvas)) {
                 if(!opennow::gpu::takeVideoDrawn())opennow::gpu::drawInterface(pixels);
                 if(!opennow::gpu::swap())halt("OpenNOW: GPU presentation failed");
             } else sceKernelUsleep(1000);
         }
+        std::free(pixels);
+        return;
     }
 #endif
     if (!verify_unique_ownership())
@@ -532,18 +542,22 @@ void read_asset_text(const char *path, std::span<char> destination,
     // Wait for completion before recycling a displayed buffer.
     unsigned index=0;
     std::int64_t serial=1;
-    for (;;) {
+    while(!stopRequested.load()) {
         struct kevent event{}; int count=0; unsigned timeout=2000000;
-        if (sceKernelWaitEqueue(queue,&event,1,&count,&timeout)<0 || count!=1)
-            halt("OpenNOW: flip completion timed out");
+        const int waited=sceKernelWaitEqueue(queue,&event,1,&count,&timeout);
+        if(stopRequested.load())break;
+        if(waited<0||count!=1)halt("OpenNOW: flip completion timed out");
         index^=1;
         auto& canvas=index ? second : first;
         // Poll promptly so a 60 FPS stream does not wait another 16 ms for a flip.
-        while (!draw(canvas)) sceKernelUsleep(2000);
+        while (!stopRequested.load()&&!draw(canvas)) sceKernelUsleep(2000);
+        if(stopRequested.load())break;
         flush_range(index ? second_frame : mapped,frame_bytes);
         if (sceVideoOutSubmitFlip(video,index,1,++serial)<0)
             halt("OpenNOW: flip failed");
     }
+    (void)sceKernelDeleteEqueue(queue);
+    (void)sceVideoOutClose(video);
 #endif
 }
 } // namespace ps5::demo

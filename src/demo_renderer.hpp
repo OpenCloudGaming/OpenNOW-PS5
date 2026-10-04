@@ -26,7 +26,9 @@ enum class Color : std::uint32_t
 
 class Canvas;
 using DrawScene = bool (*)(Canvas &) noexcept;
-[[noreturn]] void run(DrawScene draw, std::string_view ready_message) noexcept;
+void run(DrawScene draw, std::string_view ready_message) noexcept;
+
+void requestStop() noexcept;
 
 class Canvas final
 {
