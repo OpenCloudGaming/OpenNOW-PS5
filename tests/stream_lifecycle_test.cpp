@@ -20,6 +20,7 @@ std::string incoming;
 std::vector<std::string> candidates;
 std::string remoteSdp;
 std::vector<std::string> outbound;
+std::vector<std::string> diagnostics;
 std::string connectedUrl;
 void (*localIce)(char*, void*) = nullptr;
 void* localIceContext = nullptr;
@@ -98,7 +99,7 @@ void secureErase(void* data, std::size_t size) noexcept { std::memset(data, 0, s
 
 extern "C" {
 unsigned long long sceKernelGetProcessTime() { return 1000000; }
-void opennow_media_note(const char*) {}
+void opennow_media_note(const char* note) { diagnostics.emplace_back(note); }
 int opennow_peer_random(unsigned char*, std::size_t);
 int peer_init() { if (!runtimeResult) ++runtimes; return runtimeResult; }
 void peer_deinit() { --runtimes; }
@@ -152,6 +153,24 @@ int main() {
     opennow::Media media;
     opennow::Stream stream(media);
     auto launch = session();
+    struct RouteCase {opennow::SignalingSource source;const char* label;};
+    for(const auto& route:{
+        RouteCase{opennow::SignalingSource::none,"none"},
+        RouteCase{opennow::SignalingSource::explicitUrl,"explicit"},
+        RouteCase{opennow::SignalingSource::streamConnection,"stream"},
+        RouteCase{opennow::SignalingSource::alternateConnection,"alternate"},
+        RouteCase{opennow::SignalingSource::sessionControl,"control"}
+    }) {
+        launch.signalingSource=route.source;socketStarts=false;diagnostics.clear();
+        assert(!stream.start(launch,"test"));
+        const auto expected=std::string("Signaling: mock connect failure [route=")+route.label+"]";
+        assert(stream.status()==expected);
+        assert(diagnostics.back()==expected);
+        assert(std::find(diagnostics.begin(),diagnostics.end(),std::string("SIGNALING route=")+route.label)!=diagnostics.end());
+        for(const auto& note:diagnostics){assert(note.find(launch.id)==std::string::npos);assert(note.find("signaling.example")==std::string::npos);}
+        clean();
+    }
+    socketStarts=true;
     assert(stream.start(launch, "test"));
     assert(!stream.failed());
     dropSocket = true;

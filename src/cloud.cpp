@@ -180,14 +180,19 @@ bool Cloud::parseSession(const Response& r) noexcept {
     if(cJSON_IsString(status)){auto* s=status->valuestring;if(!std::strcmp(s,"queued"))state=0;else if(!std::strcmp(s,"ready")||!std::strcmp(s,"active"))state=2;else if(!std::strcmp(s,"streaming")||!std::strcmp(s,"playing"))state=3;else if(!std::strcmp(s,"provisioning")||!std::strcmp(s,"initializing")||!std::strcmp(s,"setup")||!std::strcmp(s,"launching"))state=1;else if(!std::strcmp(s,"resuming"))state=6;else if(!std::strcmp(s,"finished"))state=7;}
     if(state==4||state==5){fail("Cloud session paused. Stop it before launching again");return false;}
     if(state==7){fail("Cloud session ended");return false;}
-    if(*str(sess,"signalingUrl"))copy(session_.signaling,str(sess,"signalingUrl"));
+    session_.signaling[0]=session_.mediaIp[0]=0;session_.mediaPort=0;session_.signalingSource=SignalingSource::none;
+    if(*str(sess,"signalingUrl")&&copy(session_.signaling,str(sess,"signalingUrl")))session_.signalingSource=SignalingSource::explicitUrl;
     if(*str(sess,"serverIp"))copy(session_.mediaIp,str(sess,"serverIp"));
     const auto* control=obj(sess,"sessionControlInfo");
     if(!*session_.mediaIp) {char ip[sizeof(session_.mediaIp)];int port=0;if(connectionAddress(control,ip,sizeof(ip),port))copy(session_.mediaIp,ip);}
-    const cJSON* conn;cJSON_ArrayForEach(conn,obj(sess,"connectionInfo")) {
-        if((num(conn,"usage")==14||num(conn,"usage")==16)&&!*session_.signaling)signalingAddress(session_.signaling,sizeof(session_.signaling),conn,session_.mediaIp);
+    const cJSON* conn;
+    for(int usage:{14,16}) {
+        cJSON_ArrayForEach(conn,obj(sess,"connectionInfo")) {
+            if(num(conn,"usage")==usage&&!*session_.signaling&&signalingAddress(session_.signaling,sizeof(session_.signaling),conn,session_.mediaIp))
+                session_.signalingSource=usage==14?SignalingSource::streamConnection:SignalingSource::alternateConnection;
+        }
     }
-    if(!*session_.signaling&&control)signalingAddress(session_.signaling,sizeof(session_.signaling),control,session_.mediaIp);
+    if(!*session_.signaling&&control&&signalingAddress(session_.signaling,sizeof(session_.signaling),control,session_.mediaIp))session_.signalingSource=SignalingSource::sessionControl;
     for(int usage:{2,17,14}) {
         char bestIp[sizeof(session_.mediaIp)]{};int bestPort=0;
         cJSON_ArrayForEach(conn,obj(sess,"connectionInfo")) {

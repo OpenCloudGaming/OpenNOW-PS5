@@ -67,13 +67,17 @@ Development build `00.002.036` preserves a stream failure message after cleanup 
 
 Development build `00.002.038` aligns signaling with OpenNOW's Android native branch. Relative signaling paths use secure WebSocket port 443, separate from the media port; explicit `wss://` endpoints retain their own port. The client sends Android's browser User-Agent, accepts text and binary signaling messages, preserves public ICE candidates, and sends local candidates with the negotiated BUNDLE MID. Failed upgrades report the HTTP status or failed validation check without exposing session IDs, headers, or response bodies. Certificate and WebSocket challenge validation remain enabled.
 
+Development build `00.002.039` refreshes signaling and media endpoints from each session response, so a provisioning-time control address cannot override a later streaming address. Streaming connections take priority over alternate connections regardless of array order. Failed upgrades include a fixed route category for troubleshooting without showing the endpoint or session credentials.
+
 For existing installations, artwork files can be cached in the registered title metadata. Use the loader's supported refresh or re-registration procedure if the home-screen icon or background remains stale. Replacing the title folder alone may not refresh the background reference.
 
 ## Privacy
 
-NVIDIA login credentials and the device identity are saved in `/data/opennow/account.bin`, outside the installed title, so closing the app, rebooting the PS5 and replacing the app preserve the login. The app restores and renews the saved login automatically; temporary network failures keep the saved credentials and retry. L1+R1 together in the menu signs out and removes the saved login; closing with Circle or stopping a game session keeps it. NVIDIA can still require a new sign-in if the renewal credentials expire or are revoked. The UI reports `ACCOUNT SAVED` or `ACCOUNT NOT SAVED`. The file uses owner-only permissions and contains sensitive credentials without encryption; keep it private.
+Starting with `00.002.039`, NVIDIA login credentials and the device identity are saved in `/download0/opennow/account.bin`, the title's writable sandbox storage. Earlier builds attempted to use `/data/opennow`, which is unavailable to a normal sandboxed app. If an existing legacy account file is readable, the app continues using it without copying or deleting it. Otherwise, sign in once to create the sandbox account file. Ordinary app closure, restart, and replacement of application files retain this storage; removing the title or clearing its download data can erase it.
 
-Public source and packages exclude local configuration, account data, session logs, console dumps and captured gameplay. Private bounded diagnostics can be written under `/data/opennow`; an explicit local marker enables a short video capture for troubleshooting. Do not upload that directory when reporting an issue.
+The app restores and renews the saved login automatically; temporary network failures keep the saved credentials and retry. L1+R1 together in the menu signs out and removes the saved login; closing with Circle or stopping a game session keeps it. NVIDIA can still require a new sign-in if the renewal credentials expire or are revoked. The UI reports `ACCOUNT SAVED` or `ACCOUNT NOT SAVED`. The file uses owner-only permissions and contains sensitive credentials without encryption; keep it private.
+
+Public source and packages exclude local configuration, account data, session logs, console dumps and captured gameplay. Private bounded diagnostics are written under `/download0/opennow`, initialized before GPU startup; an explicit local marker enables a short video capture for troubleshooting. Do not upload that directory when reporting an issue.
 
 ## Build and test
 

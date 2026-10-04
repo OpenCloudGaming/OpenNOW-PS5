@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "demo_renderer.hpp"
 #include "gfn.hpp"
-#include "account_file.hpp"
+#include "app_storage.h"
 #include "http.hpp"
 #include "random.hpp"
 #include "cloud.hpp"
@@ -46,6 +46,7 @@ opennow::StreamProfile publishedProfile=opennow::StreamProfile::quality;
 pthread_mutex_t viewMutex=PTHREAD_MUTEX_INITIALIZER;
 std::atomic_int command{0};
 opennow::Http* activeHttp=nullptr; // Set before UI loop; lifetime is the process.
+int storageError=0;
 int pad=-1;
 unsigned lastButtons=0;
 opennow::CatalogSearch searchInput;
@@ -54,9 +55,16 @@ void publish(const opennow::View& v) {
     pthread_mutex_lock(&viewMutex); published=v; pthread_mutex_unlock(&viewMutex);
 }
 void* worker(void*) {
+    if (storageError!=0) {
+        opennow::View v;v.state=State::failed;
+        std::snprintf(v.message,sizeof(v.message),"Persistent storage unavailable (code %d)",storageError);
+        publish(v);
+        while (command.exchange(0)!=10) sceKernelUsleep(10000);
+        ps5::demo::requestStop();return nullptr;
+    }
     auto& http=*activeHttp;
     // One process-lifetime worker owns these large bounded objects.
-    static opennow::Login login(opennow::Http::request,&http,"/data/opennow/account.bin");
+    static opennow::Login login(opennow::Http::request,&http,opennow::appStorage::accountPath());
     unsigned char random[16]; char id[37]{};
     if (!opennow::randomBytes(random,sizeof(random)) || !http.ready()) {
         opennow::View v; v.state=State::failed;
@@ -68,8 +76,6 @@ void* worker(void*) {
 #ifndef OPENNOW_HOST_PREVIEW
     static opennow::Stream stream(media);
 #endif
-    if (opennow::accountFile::makeDirectory("/data/opennow",0700)==0)
-        opennow::accountFile::syncParent("/data/opennow");
     opennow::View restoring; restoring.state=State::requesting;
     std::snprintf(restoring.message,sizeof(restoring.message),"Checking saved NVIDIA login...");
     publish(restoring);
@@ -388,6 +394,7 @@ int main() {
     ps5::demo::run(draw,"Host preview - fixture data");
     return 0;
 #else
+    storageError=opennow::appStorage::initialize();
     opennow::gpu::initialize();
     sceNetInit(); sceUserServiceInitialize(nullptr); scePadInit();
     activeHttp=new opennow::Http;
