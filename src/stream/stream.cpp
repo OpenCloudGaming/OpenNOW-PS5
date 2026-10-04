@@ -33,7 +33,7 @@ void be(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes
 }
 bool Stream::start(const Session& s,const char* device) {
  qos_={};nextQos_=0;qosRequested_=false;
- stop();opennow_media_note("START 00.002.039");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
+ stop();opennow_media_note("START 00.002.040");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
  capture_.arm(OPENNOW_STORAGE_ROOT,settings_.codec==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){fail("Invalid secure signaling endpoint");release();return false;}
  if(!media_.start(settings_)){fail("Could not initialize video decoder / audio output");release();return false;}
@@ -155,7 +155,7 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
    // Replace a small private snapshot, so late symptoms remain observable after
    // the bounded startup media log has filled. No session/network secrets.
    if(auto* live=std::fopen(OPENNOW_STORAGE_ROOT "/live-video.status","wb")){
-    std::fprintf(live,"version=00.002.039 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
+    std::fprintf(live,"version=00.002.040 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
      static_cast<unsigned long long>(now-started_),media_.decodedWidth.load(),media_.decodedHeight.load(),media_.videoBytes.load(),media_.frames.load(),media_.presented.load(),media_.decodeError.load(),media_.actualHdr.load(),stats.access_units_dropped,stats.sequence_gaps,media_.queueDrops.load(),media_.recoveryResets.load(),peer_connection_datachannel_is_open(pc_,6),qos_.queuedCount(),capture_.bytes(),capture_.done());
     std::fprintf(live,"au_received=%u queue_depth=%u queue_peak=%u queue_max_us=%llu decode_calls=%u decode_us=%llu decode_max_us=%llu gpu_calls=%u gpu_us=%llu gpu_max_us=%llu\n",
      stats.access_units_completed,media_.queueDepth.load(),media_.queuePeak.load(),static_cast<unsigned long long>(media_.queueMaxUs.load()),media_.decodeCalls.load(),static_cast<unsigned long long>(media_.decodeUs.load()),static_cast<unsigned long long>(media_.decodeMaxUs.load()),media_.gpuCalls.load(),static_cast<unsigned long long>(media_.gpuUs.load()),static_cast<unsigned long long>(media_.gpuMaxUs.load()));

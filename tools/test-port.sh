@@ -24,7 +24,7 @@ build/host-tests/catalog-search-test
 ${CC:-cc} -O1 -g -fsanitize=address,undefined -c src/vendor/qrcodegen.c -o build/host-tests/qrcode.o
 link_flags=(-Wl,--gc-sections)
 if [[ $(uname -s) == Darwin ]]; then link_flags=(-Wl,-dead_strip); fi
-${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -DOPENNOW_HOST_PREVIEW -Isrc "${link_flags[@]}" tests/main_ui_test.cpp src/demo_renderer.cpp build/host-tests/qrcode.o -o build/host-tests/main-ui-test
+${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -DOPENNOW_HOST_PREVIEW -Isrc "${link_flags[@]}" tests/main_ui_test.cpp src/demo_renderer.cpp src/ui/font.cpp src/ui/tv_ui.cpp build/host-tests/qrcode.o -o build/host-tests/main-ui-test
 build/host-tests/main-ui-test
 build/host-tests/cloud-test
 

@@ -108,6 +108,13 @@ No proprietary runtime module, encryption key, or game file is included.
 - **ProsperoLight**, BlackBearReloaded, GPL-3.0-or-later: `src/platform/ps5_sockets.c`, `ps5_network_metrics.h`, `console_curl.c`, `console_curl.h`, and the pthread-once compatibility approach. Local adaptations fix no-argument `fcntl` handling, use this application's identity, and integrate the bundled CA file. Revision: `upstream-lock.json`.
 - **cJSON** v1.7.19, Dave Gamble and contributors, MIT. Source: `src/vendor/cJSON.*`; license: `licenses/cJSON.txt`.
 
+## Television interface fonts and rasterizer (00.002.040)
+
+- **Nunito**, Copyright 2014 The Nunito Project Authors, SIL Open Font License 1.1. Static SemiBold (600), Bold (700), ExtraBold (800) and Black (900) instances of `ofl/nunito/Nunito[wght].ttf`. License: `assets/fonts/licenses/Nunito-OFL.txt`.
+- **IBM Plex Mono** Medium, Copyright © 2017 IBM Corp., with Reserved Font Name "Plex", SIL Open Font License 1.1. Source: `ofl/ibmplexmono/IBMPlexMono-Medium.ttf`. License: `assets/fonts/licenses/IBMPlexMono-OFL.txt`. The packaged subset is a Modified Version, so it is renamed **OpenNOW Mono** (`assets/fonts/OpenNOWMono-Medium.ttf`) as the Reserved Font Name requires.
+- Both fonts come from google/fonts commit `9710da1eacb3be272583c3224dcb70f9da6eadbb`. `tools/make-ui-fonts.py` checks the SHA-256 of each source and regenerates `assets/fonts/*.ttf` byte-for-byte with fontTools 4.60.1. It instances the Nunito weights, subsets both fonts to Latin text, removes hinting and renames the Plex subset. The fonts ship in `/app0/assets/fonts` together with their licenses, and remain under the OFL. They are not relicensed under this project's GPL.
+- **stb_truetype** v1.26, Sean Barrett, dual-licensed public domain / MIT. Source: `src/vendor/stb_truetype.h` (nothings/stb `f58f558c120e9b32c217290b80bad1a0729fbb2c`). It rasterizes those fonts at runtime in `src/ui/font.cpp`. The license text is at the end of the header.
+
 ## Experimental hardware video backend
 
 - Public Videodec2 interface declarations in `src/stream/native/videodec2_api.hpp` adapted from **VivaLaVent/kodi-ps5**, `overlay/xbmc/platform/ps5/video/VideoDec2.cpp`, Copyright (C) 2026 Team Kodi, GPL-2.0-or-later, used here under GPL-3.0-or-later. Revision: `upstream-lock.json`. The local backend separately implements bounded memory allocation, native mode validation, surface leases and shutdown checks. Kodi’s foreign-memory/HDR driver patch is retained in `tools/gpu/kodi-additions.py` and applied to the linked public GPU runtime. The HDR scanout packing approach in `gpu_presenter.cpp` is adapted from Kodi’s HdrOutputPS5 shader, with its GPL-2.0-or-later attribution; the resulting application is GPL-3.0-or-later.
