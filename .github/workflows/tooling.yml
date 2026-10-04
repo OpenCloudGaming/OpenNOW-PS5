@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install host compiler
-        run: sudo apt-get update && sudo apt-get install --yes clang-18 libclang-rt-18-dev
+        run: sudo apt-get update && sudo apt-get install --yes clang-18 libclang-rt-18-dev libcurl4-openssl-dev
       - name: Run synthetic host regressions with ASan and UBSan
         env:
           CC: clang-18

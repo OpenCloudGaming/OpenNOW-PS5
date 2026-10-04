@@ -127,6 +127,7 @@ The original runtime boilerplate source archive used here has SHA-256 `133b4ec9d
 ## Streaming additions (0.2)
 
 - OpenNOW-Switch (MIT, pinned in `upstream-lock.json`): WebSocket transport/handshake/queue, SDP/NVST negotiation helpers and associated protocol tests; retained notice in `licenses/OpenNOW-Switch.txt`.
+- OpenNOW v0.5.5 (`44b80f207e84a2e4a6cda58205aa54e67aacb56f`, GPL-3.0-or-later): additional WebSocket session lifecycle and mapped ICE endpoint reference for development build `00.002.036`. The `OpenNOW-WebRTC-reference` entry pins this transport-compatible revision separately from the newer desktop client's native RTSPS implementation.
 - libpeer, copied from that pinned tree with native PS5 socket, address and entropy adaptations: `vendor/libpeer/LICENSE` and `licenses/libpeer.txt`.
 - Mbed TLS, libsrtp and usrsctp are source-built from the pinned Switch archive. Notices are retained in `licenses/mbedtls.txt`, `licenses/libsrtp.txt` and `licenses/usrsctp.txt`. Source retrieval and verification are in `tools/setup-stream-sources.sh`.
 - PacBrew FFmpeg libavcodec/libswscale provide software H.264 decode and color conversion; Opus provides stereo audio decode. Their upstream licenses and PacBrew build configuration apply to the linked archives. Preserve the corresponding source/build metadata and notices with redistribution.

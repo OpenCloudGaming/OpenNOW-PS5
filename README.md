@@ -40,7 +40,7 @@ Performance may differ by game, server, network, display and profile. Requested 
 2. Verify the ZIP against its entry in `SHA256SUMS` using `shasum -a 256` or `sha256sum`. If you download every listed asset, you can use `shasum -a 256 -c SHA256SUMS`.
 3. Extract the archive. Install the included `PPSA99082` folder through a compatible native homebrew directory loader, such as ShadowMountPlus. Follow your loader's registration procedure and check that this title ID is unused.
 4. Before replacing an existing installation, close OpenNOW completely and retain a backup of its title folder.
-5. Create `/data/opennow/launch-age.txt` containing your age as an integer from 0 to 120. This personal configuration is required for session requests and is excluded from the release.
+5. For the published 0.0.5-alpha package, create `/data/opennow/launch-age.txt` containing your age as an integer from 0 to 120. Development build `00.002.036` instead prompts for your age on the controller before the first launch and saves this private file automatically. It does not supply a default age.
 6. Open the app and authenticate using NVIDIA's device authorization page shown on screen. Check that `ACCOUNT SAVED` appears. Circle in the menu closes the app while preserving the saved login; L1+R1 together signs out and removes it.
 
 Requires a PS5 environment that can run native homebrew titles, a GeForce NOW account with suitable streaming capabilities, and a compatible display for the requested mode. The package has been tested in one homebrew console environment; compatibility with other firmware/loader combinations is unverified. This is a directory package, not a retail PS5 store application or a PKG installer.
@@ -57,9 +57,14 @@ Requires a PS5 environment that can run native homebrew titles, a GeForce NOW ac
 | R1 | Load the next catalog page |
 | Circle | Close the app from the menu; cancel text entry in the search keyboard |
 | L1+R1 together | Sign out and remove the saved login |
-| Options + touchpad | Stop gameplay streaming |
+| Options | Edit your saved age from the catalog in development build `00.002.036` |
+| Options + touchpad | Stop gameplay streaming; also cancel queueing or retry session cleanup in development build `00.002.036` |
 
 In the search keyboard, use the D-pad to select a character and Cross to type it. Square deletes a character, Triangle clears the text, Options submits the search and Circle cancels. R1 advances through search results; Square in the catalog returns to the full catalog.
+
+In the age dialog, use the D-pad and Cross to enter your own age. Square deletes a digit, Triangle clears the value, Options saves it and Circle cancels without closing the app. When the dialog appears after Play, saving continues that launch. The value stays outside the installed title and is never included in packages.
+
+Development build `00.002.036` preserves a stream failure message after cleanup so you can retry from the catalog. If cleanup fails, use Options + touchpad to retry **STOP SESSION** before starting another game. While the app remains open, it retains the session for another cleanup attempt. Explicitly closing the app attempts cleanup but still exits if the network or credentials prevent it; the remote session may remain active.
 
 For existing installations, artwork files can be cached in the registered title metadata. Use the loader's supported refresh or re-registration procedure if the home-screen icon or background remains stale. Replacing the title folder alone may not refresh the background reference.
 
@@ -71,13 +76,29 @@ Public source and packages exclude local configuration, account data, session lo
 
 ## Build and test
 
-Host tests use synthetic fixtures and do not require a console or account:
+Host tests use synthetic fixtures and do not require a console or account. Install Clang with AddressSanitizer and UndefinedBehaviorSanitizer support, Python 3, and libcurl development headers. This uses the same compiler family as CI:
 
 ```sh
-bash tools/test-port.sh
+CC=clang CXX=clang++ bash tools/test-port.sh
 ```
 
-Native Docker builds in this project's workflow run on a separate Linux build host over SSH. Configure the `vps` SSH alias and remote workspace for your environment. The GPU build additionally requires preparing the pinned public GPU SDK/runtime; see [native hardware video](docs/NATIVE_HARDWARE_VIDEO.md) and [dependency/source provenance](THIRD_PARTY_NOTICES.md).
+To build the development GPU package on a Linux Docker host without the `vps` SSH alias:
+
+```sh
+bash tools/gpu/build-local.sh
+```
+
+The build downloads and verifies the pinned public SDK archives, builds the GPU runtime and streaming dependencies, and writes `dist/PPSA99082` and `dist/manifest.json`. It does not deploy to a console or include account files. A successful build and host tests do not establish that a live NVIDIA stream works on your console.
+
+To inspect the controller age dialog with the native CPU renderer on Linux or macOS:
+
+```sh
+OPENNOW_PREVIEW_AGE=1 bash tools/preview-port.sh
+```
+
+The output is `build/preview.png`. Linux needs libcurl development headers and Python Pillow; macOS uses `sips`. This preview uses labeled fixture data, not an authenticated session or video stream.
+
+The alternative SSH build workflow runs Docker on a separate Linux host. Configure the `vps` SSH alias and remote workspace for your environment. That GPU build requires preparing the pinned public GPU SDK/runtime on the remote host; see [native hardware video](docs/NATIVE_HARDWARE_VIDEO.md) and [dependency/source provenance](THIRD_PARTY_NOTICES.md).
 
 ```sh
 # Software compatibility build

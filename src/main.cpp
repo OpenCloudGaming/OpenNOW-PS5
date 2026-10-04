@@ -6,6 +6,7 @@
 #include "random.hpp"
 #include "cloud.hpp"
 #include "catalog_search.hpp"
+#include "launch_age.hpp"
 #include "stream/native/gpu_presenter.hpp"
 #ifndef OPENNOW_HOST_PREVIEW
 #include "stream/stream.hpp"
@@ -40,6 +41,8 @@ PS5_PadData publishedPad{};
 opennow::Media media;
 #endif
 bool publishedStream=false;
+bool publishedSession=false;
+bool publishedStreamFailure=false;
 opennow::StreamProfile publishedProfile=opennow::StreamProfile::quality;
 pthread_mutex_t viewMutex=PTHREAD_MUTEX_INITIALIZER;
 std::atomic_int command{0};
@@ -47,6 +50,8 @@ opennow::Http* activeHttp=nullptr; // Set before UI loop; lifetime is the proces
 int pad=-1;
 unsigned lastButtons=0;
 opennow::CatalogSearch searchInput;
+opennow::LaunchAgeInput ageInput;
+std::atomic_bool ageRequested{false};
 char pendingSearch[128]{};
 void publish(const opennow::View& v) {
     pthread_mutex_lock(&viewMutex); published=v; pthread_mutex_unlock(&viewMutex);
@@ -73,6 +78,7 @@ void* worker(void*) {
     publish(restoring);
     login.restore(id,sceKernelGetProcessTime()/1000000);
     bool catalogLoaded=false,streamAttempted=false;
+    char streamFailure[192]{};
 #ifndef OPENNOW_HOST_PREVIEW
     auto profile=opennow::gpu::bestProfile();
 #else
@@ -85,21 +91,25 @@ void* worker(void*) {
 #ifndef OPENNOW_HOST_PREVIEW
             stream.stop();
 #endif
-            if(*cloud.session().id)cloud.stop(login.cloudToken(),id);
+            streamAttempted=false;
+            const bool stopped=!*cloud.session().id||cloud.stop(login.cloudToken(),id);
             if(action==10){ps5::demo::requestStop();return nullptr;}
-            login.cancel();cloud.reset();catalogLoaded=false;streamAttempted=false;
+            if(stopped) {
+                login.cancel();cloud.reset();catalogLoaded=false;streamFailure[0]=0;
+            }
         }
         if (action==2) {
             http.cancelled.store(false);
 #ifndef OPENNOW_HOST_PREVIEW
             stream.stop();
 #endif
-            if(*cloud.session().id) { cloud.stop(login.cloudToken(),id);streamAttempted=false; }
-            else {login.cancel();cloud.reset();catalogLoaded=false;}
+            streamAttempted=false;
+            cloud.stop(login.cloudToken(),id);
         }
         if (action==1) {
             http.cancelled.store(false);
-            cloud.reset();catalogLoaded=false;streamAttempted=false;
+            if(!*cloud.session().id) {cloud.reset();catalogLoaded=false;}
+            streamAttempted=false;streamFailure[0]=0;
             opennow::View v; v.state=State::requesting;
             std::snprintf(v.message,sizeof(v.message),"Contacting NVIDIA securely..."); publish(v);
             if (!login.restore(id,sceKernelGetProcessTime()/1000000))
@@ -119,38 +129,55 @@ void* worker(void*) {
             }
             if(action==3)cloud.select(-1);
             if(action==4)cloud.select(1);
-            if(action==5){
-                // Personal launch configuration is separate from the distributable title.
-                int age=-1;char trailing=0;
-                if(FILE* config=std::fopen("/data/opennow/launch-age.txt","r")){
-                    if(std::fscanf(config,"%d %c",&age,&trailing)!=1)age=-1;
-                    std::fclose(config);
+            if(action==5&&cloud.view().state==opennow::CloudState::catalog){
+                streamFailure[0]=0;
+                const int age=opennow::readLaunchAge();
+                if(age<0)ageRequested.store(true);
+                else {
+                    pthread_mutex_lock(&viewMutex);
+                    publishedCloud.state=opennow::CloudState::starting;
+                    std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Starting cloud session...");
+                    pthread_mutex_unlock(&viewMutex);
+                    cloud.launch(login.cloudToken(),id,now/1000000,age,profile);streamAttempted=false;
                 }
-                cloud.launch(login.cloudToken(),id,now/1000000,age,profile);streamAttempted=false;
             }
-            if(action==6)cloud.load(login.cloudToken(),id,"",false);
-            if(action==7&&cloud.view().hasNext)cloud.load(login.cloudToken(),id,"",true);
-            if(action==8){
+            if(action==6&&!*cloud.session().id) {streamFailure[0]=0;cloud.load(login.cloudToken(),id,"",false);}
+            if(action==7&&!*cloud.session().id&&cloud.view().hasNext) {streamFailure[0]=0;cloud.load(login.cloudToken(),id,"",true);}
+            if(action==8&&!*cloud.session().id){
+                streamFailure[0]=0;
                 char search[128];
                 pthread_mutex_lock(&viewMutex);std::memcpy(search,pendingSearch,sizeof(search));pthread_mutex_unlock(&viewMutex);
                 cloud.load(login.cloudToken(),id,search,false);
             }
+            if(const int pending=command.load();pending==2||pending==10||pending==11)continue;
             cloud.tick(login.cloudToken(),id,now/1000000);
+            if(const int pending=command.load();pending==2||pending==10||pending==11)continue;
 #ifndef OPENNOW_HOST_PREVIEW
             if(cloud.view().state==opennow::CloudState::ready&&!streamAttempted){streamAttempted=true;stream.start(cloud.session(),id);}
             if(stream.active()){
                 stream.tick(now);PS5_PadData padState{};pthread_mutex_lock(&viewMutex);padState=publishedPad;pthread_mutex_unlock(&viewMutex);stream.input(padState,now);
             }
+            if(stream.failed()) {
+                std::snprintf(streamFailure,sizeof(streamFailure),"%s",stream.status());
+                stream.stop();streamAttempted=false;
+                cloud.stop(login.cloudToken(),id);
+            }
 #endif
         }
         pthread_mutex_lock(&viewMutex);publishedCloud=cloud.view();publishedProfile=profile;
+        publishedSession=*cloud.session().id!=0;
+        publishedStreamFailure=*streamFailure!=0;
+        if(*streamFailure) {
+            if(publishedSession)std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"%.75s | Cleanup: %.100s",streamFailure,cloud.view().message);
+            else std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"%s",streamFailure);
+        }
 #ifndef OPENNOW_HOST_PREVIEW
         publishedStream=stream.active();
         if(streamAttempted)std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"%s",stream.status());
 #endif
         pthread_mutex_unlock(&viewMutex);
         // A cancellation during a blocking request must win over its response.
-        if (command.load()==2) continue;
+        if (command.load()==2||command.load()==10||command.load()==11) continue;
         publish(login.view());
         sceKernelUsleep(publishedStream?2000:100000);
     }
@@ -166,11 +193,36 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     if (pad>=0 && scePadReadState(pad,&data)==0 && data.connected) {
         pressed=data.buttons & ~lastButtons; lastButtons=data.buttons;
     } else lastButtons=0;
-    opennow::View v;opennow::CloudView cv;bool streaming=false;opennow::StreamProfile profile;
-    pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;publishedPad=data;streaming=publishedStream;profile=publishedProfile;pthread_mutex_unlock(&viewMutex);
+    opennow::View v;opennow::CloudView cv;bool streaming=false,sessionOwned=false,streamFailed=false;opennow::StreamProfile profile;
+    pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;publishedPad=data;streaming=publishedStream;sessionOwned=publishedSession;streamFailed=publishedStreamFailure;profile=publishedProfile;pthread_mutex_unlock(&viewMutex);
+    static bool ageWasOpen=false;
+    bool ageChanged=ageWasOpen;
+    if(v.state!=State::authenticated||streaming||sessionOwned||cv.state!=opennow::CloudState::catalog)ageInput.cancel();
+    if(ageRequested.exchange(false)&&v.state==State::authenticated&&!streaming&&!sessionOwned&&cv.state==opennow::CloudState::catalog) {
+        searchInput.open=false;ageInput.begin(-1,true);
+    }
+    if(ageInput.open) {
+        if(pressed&PS5_PAD_BUTTON_CIRCLE)ageInput.cancel();
+        else {
+            if(pressed&PS5_PAD_BUTTON_LEFT)ageInput.move(-1);
+            if(pressed&PS5_PAD_BUTTON_RIGHT)ageInput.move(1);
+            if(pressed&PS5_PAD_BUTTON_UP)ageInput.move(-5);
+            if(pressed&PS5_PAD_BUTTON_DOWN)ageInput.move(5);
+            if(pressed&PS5_PAD_BUTTON_CROSS)ageInput.append();
+            if(pressed&PS5_PAD_BUTTON_SQUARE)ageInput.erase();
+            if(pressed&PS5_PAD_BUTTON_TRIANGLE)ageInput.clear();
+            if((pressed&PS5_PAD_BUTTON_OPTIONS)&&ageInput.confirm()==opennow::LaunchAgeInput::Result::launch)
+                command.store(5);
+        }
+        ageChanged=true;pressed=0;
+    } else if(!searchInput.open&&v.state==State::authenticated&&!streaming&&
+              cv.state==opennow::CloudState::catalog&&!sessionOwned&&(pressed&PS5_PAD_BUTTON_OPTIONS)) {
+        ageInput.begin(opennow::readLaunchAge(),false);ageChanged=true;pressed=0;
+    }
+    ageWasOpen=ageInput.open;
     static bool searchWasOpen=false;
     bool searchChanged=searchWasOpen;
-    if(v.state!=State::authenticated||streaming)searchInput.open=false;
+    if(v.state!=State::authenticated||streaming||sessionOwned)searchInput.open=false;
     if(searchInput.open) {
         if(pressed&PS5_PAD_BUTTON_LEFT)searchInput.move(-1,0);
         if(pressed&PS5_PAD_BUTTON_RIGHT)searchInput.move(1,0);
@@ -186,7 +238,9 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         }
         searchChanged=true;
         pressed=0;
-    } else if(v.state==State::authenticated&&!streaming&&(pressed&PS5_PAD_BUTTON_TRIANGLE)) {
+    } else if(v.state==State::authenticated&&!streaming&&!sessionOwned&&
+              (cv.state==opennow::CloudState::catalog||cv.state==opennow::CloudState::failed)&&
+              (pressed&PS5_PAD_BUTTON_TRIANGLE)) {
         searchInput.open=true;searchChanged=true;pressed=0;
     }
     searchWasOpen=searchInput.open;
@@ -196,14 +250,16 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     } else if(!streaming&&v.state==State::authenticated&&
         (data.buttons&signOutButtons)==signOutButtons&&(pressed&signOutButtons)&&activeHttp) {
         activeHttp->cancelled.store(true);command.store(11);pressed=0;
-    } else if (streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD) && activeHttp) {
+    } else if ((streaming||sessionOwned||cv.state==opennow::CloudState::starting||cv.state==opennow::CloudState::queued)&&
+        (data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD) && activeHttp) {
         activeHttp->cancelled.store(true); command.store(2);
     } else if (!streaming && (pressed&PS5_PAD_BUTTON_CROSS) && v.state!=State::waiting && v.state!=State::requesting && v.state!=State::authenticated) command.store(1);
-    if(v.state==State::authenticated&&!streaming) {
+    if(v.state==State::authenticated&&!streaming&&!sessionOwned&&
+       (cv.state==opennow::CloudState::catalog||cv.state==opennow::CloudState::failed)) {
         if(cv.state==opennow::CloudState::catalog&&(pressed&PS5_PAD_BUTTON_L1))command.store(9);
         if(pressed&PS5_PAD_BUTTON_UP)command.store(3);
         if(pressed&PS5_PAD_BUTTON_DOWN)command.store(4);
-        if(pressed&PS5_PAD_BUTTON_CROSS)command.store(5);
+        if(pressed&PS5_PAD_BUTTON_CROSS)command.store(cv.state==opennow::CloudState::failed?6:5);
         if(pressed&PS5_PAD_BUTTON_SQUARE)command.store(6);
         if(pressed&PS5_PAD_BUTTON_R1)command.store(7);
     }
@@ -214,7 +270,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     static opennow::View previous;
     static auto previousProfile=opennow::StreamProfile::quality;
     static bool first=true;
-    if (!first && !searchChanged && !searchInput.open && std::memcmp(&previous,&v,sizeof(v))==0&&std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&previousProfile==profile) return false;
+    if (!first && !ageChanged && !ageInput.open && !searchChanged && !searchInput.open && std::memcmp(&previous,&v,sizeof(v))==0&&std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&previousProfile==profile) return false;
     first=false; previous=v;previousCloud=cv;previousProfile=profile;
     const auto bg=static_cast<Color>(0xff1c1610), green=static_cast<Color>(0xff9ee656);
     const auto control=[&](unsigned x,unsigned y,Canvas::Button button,std::string_view label,Color color){
@@ -280,14 +336,19 @@ bool draw(ps5::demo::Canvas& c) noexcept {
             if(cv.hasNext)control(1080,432,Canvas::Button::r1,"NEXT PAGE",green);
             unsigned page=cv.selected/7*7;
             for(unsigned i=page;i<cv.count&&i<page+7;++i){char line[256];std::snprintf(line,sizeof(line),"%s %.52s / %s",i==cv.selected?">":" ",cv.games[i].title,cv.games[i].store);c.text(100,490+(i-page)*52,line,3,i==cv.selected?green:Color::white);}
+        } else if(sessionOwned||cv.state==opennow::CloudState::starting||cv.state==opennow::CloudState::queued) {
+            c.text(100,530,"OPTIONS + TOUCHPAD: CANCEL SESSION",4,green);
+            if(cv.state==opennow::CloudState::failed)c.text(100,600,"Retry cancellation before starting another game.",3,Color::white);
         }
     }
     c.rectangle(100,832,1720,2,static_cast<Color>(0xff40372e));
     if(v.state==State::authenticated){
-        control(100,850,Canvas::Button::cross,"PLAY",Color::white);
-        control(480,850,Canvas::Button::square,"CATALOG",Color::white);
-        control(860,850,Canvas::Button::triangle,"SEARCH",Color::white);
-        if(cv.hasNext)control(1240,850,Canvas::Button::r1,"NEXT PAGE",Color::white);
+        if(!sessionOwned) {
+            control(100,850,Canvas::Button::cross,cv.state==opennow::CloudState::failed?"RETRY CATALOG":streamFailed?"RETRY":"PLAY",Color::white);
+            control(560,850,Canvas::Button::square,"CATALOG",Color::white);
+            control(940,850,Canvas::Button::triangle,"SEARCH",Color::white);
+            if(cv.state==opennow::CloudState::catalog)control(1320,850,Canvas::Button::options,"AGE",Color::white);
+        }
         control(100,915,Canvas::Button::l1,"PROFILE",green);
         c.text(330,929,opennow::profileLabel(profile),3,green);
         control(100,980,Canvas::Button::circle,"CLOSE APP",green);
@@ -330,6 +391,27 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         control(100,875,Canvas::Button::options,"SEARCH",green);
         control(480,875,Canvas::Button::circle,"CANCEL",green);
     }
+    if(ageInput.open) {
+        c.rectangle(80,300,1760,780,bg);
+        c.text(120,330,"YOUR AGE",6,green);
+        c.text(120,410,"NVIDIA requires your age before starting a game.",3,Color::white);
+        c.text(120,455,"Enter your own age (0-120). Saved privately on this PS5.",3,Color::white);
+        c.text(120,530,*ageInput.text?ageInput.text:"_",7,Color::white);
+        c.text(420,555,ageInput.error,3,green);
+        for(unsigned digit=0;digit<10;++digit) {
+            const unsigned x=150+(digit%5)*150,y=650+(digit/5)*75;
+            const char label[2]{static_cast<char>('0'+digit),0};
+            if(digit==ageInput.selected)c.rectangle(x-15,y-12,65,55,green);
+            c.text(x,y,label,5,digit==ageInput.selected?bg:Color::white);
+        }
+        c.rectangle(120,800,1680,2,static_cast<Color>(0xff40372e));
+        control(120,830,Canvas::Button::dpad,"MOVE",Color::white);
+        control(500,830,Canvas::Button::cross,"TYPE",Color::white);
+        control(880,830,Canvas::Button::square,"BACKSPACE",Color::white);
+        control(1300,830,Canvas::Button::triangle,"CLEAR",Color::white);
+        control(120,925,Canvas::Button::options,ageInput.playAfterSave?"SAVE AND PLAY":"SAVE",green);
+        control(750,925,Canvas::Button::circle,"CANCEL",green);
+    }
     return true;
 }
 }
@@ -341,14 +423,25 @@ int main() {
     std::snprintf(published.qrUrl,sizeof(published.qrUrl),"https://static-login.nvidia.com/service/gfn/pin");
     std::snprintf(published.message,sizeof(published.message),"Scan the QR code with your phone and sign in");
     published.expiresIn=900;
-    if(std::getenv("OPENNOW_PREVIEW_CATALOG")){
+    if(std::getenv("OPENNOW_PREVIEW_CATALOG")||std::getenv("OPENNOW_PREVIEW_AGE")||
+       std::getenv("OPENNOW_PREVIEW_QUEUED")||std::getenv("OPENNOW_PREVIEW_STREAM_FAILURE")){
         published.state=State::authenticated;published.sessionSaved=true;publishedCloud.state=opennow::CloudState::catalog;publishedCloud.count=2;
         std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Choose a game and store (preview fixtures)");
         std::snprintf(publishedCloud.games[0].title,sizeof(publishedCloud.games[0].title),"Example Game");std::snprintf(publishedCloud.games[0].store,sizeof(publishedCloud.games[0].store),"XBOX");
         std::snprintf(publishedCloud.games[1].title,sizeof(publishedCloud.games[1].title),"Example Game");std::snprintf(publishedCloud.games[1].store,sizeof(publishedCloud.games[1].store),"STEAM");
     }
     if(std::getenv("OPENNOW_PREVIEW_SEARCH"))searchInput.open=true;
+    if(std::getenv("OPENNOW_PREVIEW_AGE")) {searchInput.open=false;ageInput.begin(-1,true);}
+    if(std::getenv("OPENNOW_PREVIEW_QUEUED")) {
+        publishedCloud.state=opennow::CloudState::queued;publishedSession=true;
+        std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Waiting for server allocation - queue position 3 (preview fixture)");
+    }
+    if(std::getenv("OPENNOW_PREVIEW_STREAM_FAILURE")) {
+        publishedCloud.state=opennow::CloudState::catalog;publishedSession=false;publishedStreamFailure=true;
+        std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Signaling disconnected; cloud session stopped (preview fixture)");
+    }
     ps5::demo::run(draw,"Host preview - fixture data");
+    return 0;
 #else
     opennow::gpu::initialize();
     sceNetInit(); sceUserServiceInitialize(nullptr); scePadInit();

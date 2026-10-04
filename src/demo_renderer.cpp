@@ -11,7 +11,9 @@
 #ifdef OPENNOW_GPU
 #include "stream/native/gpu_presenter.hpp"
 #endif
+#ifndef OPENNOW_HOST_PREVIEW
 #include <sys/event.h>
+#endif
 
 #include <array>
 #include <atomic>

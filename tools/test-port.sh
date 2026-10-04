@@ -20,10 +20,21 @@ ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc 
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/catalog_search_test.cpp -o build/host-tests/catalog-search-test
 build/host-tests/catalog-search-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/launch_age_test.cpp -o build/host-tests/launch-age-test
+build/host-tests/launch-age-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -DOPENNOW_PS5=1 -Isrc tests/launch_age_test.cpp -o build/host-tests/launch-age-kernel-test
+build/host-tests/launch-age-kernel-test
+${CC:-cc} -O1 -g -fsanitize=address,undefined -c src/vendor/qrcodegen.c -o build/host-tests/qrcode.o
+link_flags=(-Wl,--gc-sections)
+if [[ $(uname -s) == Darwin ]]; then link_flags=(-Wl,-dead_strip); fi
+${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -DOPENNOW_HOST_PREVIEW -Isrc "${link_flags[@]}" tests/main_ui_test.cpp src/demo_renderer.cpp build/host-tests/qrcode.o -o build/host-tests/main-ui-test
+build/host-tests/main-ui-test
 build/host-tests/cloud-test
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/nvst_sdp_test.cpp src/stream/nvst_sdp.cpp src/stream/sdp.cpp -o build/host-tests/nvst-sdp-test
 build/host-tests/nvst-sdp-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -Wno-misleading-indentation -O1 -g -fsanitize=address,undefined -Isrc -Ivendor/libpeer/src tests/stream_lifecycle_test.cpp src/stream/stream.cpp src/stream/sdp.cpp src/stream/nvst_sdp.cpp build/host-tests/cJSON.o -o build/host-tests/stream-lifecycle-test
+build/host-tests/stream-lifecycle-test
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc/stream tests/websocket_write_queue_test.cpp -o build/host-tests/websocket-queue-test
 build/host-tests/websocket-queue-test
 

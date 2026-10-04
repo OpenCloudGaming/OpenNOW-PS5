@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
+#include <cstdio>
 #include <set>
 #include <vector>
 namespace opennow::sdp {
@@ -160,7 +161,7 @@ int SelectOfferH264PayloadType(const std::string& offer_sdp)
             return pt;
     }
 
-    return h264_payloads.empty() ? 96 : h264_payloads.front();
+    return h264_payloads.empty() ? 0 : h264_payloads.front();
 }
 
 int SelectOfferHevcPayloadType(const std::string& offer_sdp,bool hdr)
@@ -553,23 +554,41 @@ std::string NormalizeGfnMediaIp(const std::string& host)
     return media_ip.empty() ? host : media_ip;
 }
 
-std::string PrepareGfnOfferSdp(
-    std::string sdp,
-    const std::string& signaling_url,
+std::string RewriteGfnMediaCandidate(
+    std::string candidate,
     const std::string& media_ip_hint,
-    [[maybe_unused]] int media_port_hint)
+    int media_port_hint,
+    const std::string& signaling_url)
 {
-    std::string media_ip = NormalizeGfnMediaIp(media_ip_hint);
+    if (media_port_hint < 0 || media_port_hint > 65535)
+        return candidate;
+    if (!StartsWithString(candidate, "a=candidate:") && !StartsWithString(candidate, "candidate:"))
+        return candidate;
 
-    if (media_ip.empty()) {
-        const std::string host = ExtractSignalingHost(signaling_url);
-        media_ip = NormalizeGfnMediaIp(host);
+    size_t pos = 0, endpoint_start = 0, address_end = 0;
+    for (unsigned token = 0; token < 6; ++token) {
+        while (pos < candidate.size() && std::isspace(static_cast<unsigned char>(candidate[pos]))) ++pos;
+        if (pos == candidate.size()) return candidate;
+        if (token == 4) endpoint_start = pos;
+        const auto start = pos;
+        while (pos < candidate.size() && !std::isspace(static_cast<unsigned char>(candidate[pos]))) ++pos;
+        if (token == 4) address_end = pos;
+        if (token == 5 && candidate.find_first_not_of("0123456789", start) < pos) return candidate;
     }
-
-    if (!media_ip.empty())
-        sdp = ReplaceAll(std::move(sdp), "0.0.0.0", media_ip);
-
-    return sdp;
+    const bool mapped_endpoint = !media_ip_hint.empty() && media_port_hint > 0;
+    if (!mapped_endpoint && candidate.substr(endpoint_start, address_end - endpoint_start) != "0.0.0.0")
+        return candidate;
+    const auto media_ip = NormalizeGfnMediaIp(media_ip_hint.empty() ? ExtractSignalingHost(signaling_url) : media_ip_hint);
+    unsigned a, b, c, d;
+    char extra;
+    if (std::sscanf(media_ip.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4 ||
+        a > 255 || b > 255 || c > 255 || d > 255 || media_ip == "0.0.0.0")
+        return candidate;
+    if (mapped_endpoint)
+        candidate.replace(endpoint_start, pos - endpoint_start, media_ip + " " + std::to_string(media_port_hint));
+    else
+        candidate.replace(endpoint_start, address_end - endpoint_start, media_ip);
+    return candidate;
 }
 
 std::string BuildManualMediaCandidate(
@@ -578,17 +597,29 @@ std::string BuildManualMediaCandidate(
     int media_port_hint,
     int foundation)
 {
-    std::string media_ip = NormalizeGfnMediaIp(media_ip_hint);
-    if (media_ip.empty()) {
-        const std::string host = ExtractSignalingHost(signaling_url);
-        media_ip = NormalizeGfnMediaIp(host);
+    if (media_ip_hint.empty() || media_port_hint <= 0) return {};
+    const auto candidate = "a=candidate:" + std::to_string(foundation) + " 1 UDP 2130706431 0.0.0.0 9 typ host";
+    const auto rewritten = RewriteGfnMediaCandidate(candidate, media_ip_hint, media_port_hint, signaling_url);
+    return rewritten == candidate ? std::string{} : rewritten;
+}
+
+std::string PrepareGfnOfferSdp(
+    std::string sdp,
+    const std::string& signaling_url,
+    const std::string& media_ip_hint,
+    int media_port_hint)
+{
+    size_t start = 0;
+    while (start < sdp.size()) {
+        auto end = sdp.find('\n', start);
+        const bool newline = end != std::string::npos;
+        if (end == std::string::npos) end = sdp.size();
+        const auto line = sdp.substr(start, end - start);
+        const auto rewritten = RewriteGfnMediaCandidate(line, media_ip_hint, media_port_hint, signaling_url);
+        sdp.replace(start, line.size(), rewritten);
+        start += rewritten.size() + (newline ? 1 : 0);
     }
-
-    if (media_ip.empty() || media_port_hint <= 0)
-        return "";
-
-    return "a=candidate:" + std::to_string(foundation) + " 1 UDP 2130706431 " + media_ip + " " +
-        std::to_string(media_port_hint) + " typ host";
+    return sdp;
 }
 
 

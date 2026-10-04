@@ -18,25 +18,41 @@ struct Json {cJSON* p;explicit Json(const Response& r):p(r.body?cJSON_ParseWithL
 const char* searchQuery=R"(query GetSearchFilterResults($vpcId:String!,$locale:String!,$fetchCount:Int!,$cursor:String!,$searchString:String!,$filters:AppFilterFields!){apps(vpcId:$vpcId,language:$locale,orderBy:"itemMetadata.relevance:DESC,sortName:ASC",first:$fetchCount,after:$cursor,searchQuery:$searchString,filters:$filters){pageInfo{hasNextPage endCursor}items{id title variants{id appStore gfn{status}}}}})";
 const char* browseQuery=R"(query GetFilterBrowseResults($vpcId:String!,$locale:String!,$fetchCount:Int!,$cursor:String!,$filters:AppFilterFields!){apps(vpcId:$vpcId,language:$locale,orderBy:"itemMetadata.relevance:DESC,sortName:ASC",first:$fetchCount,after:$cursor,filters:$filters){pageInfo{hasNextPage endCursor}items{id title variants{id appStore gfn{status}}}}})";
 bool safeId(const char* s) {if(!*s)return false;for(;*s;++s)if(!((*s>='a'&&*s<='z')||(*s>='A'&&*s<='Z')||(*s>='0'&&*s<='9')||*s=='-'||*s=='_'))return false;return true;}
-bool signalingAddress(char* out,std::size_t capacity,const cJSON* connection) {
-    const char* path=str(connection,"resourcePath");
-    if(!std::strncmp(path,"wss://",6))return put(out,capacity,path);
-    if(!std::strncmp(path,"https://",8)){return std::snprintf(out,capacity,"wss://%s",path+8)>0&&std::strlen(path)-2<capacity;}
-    if(!std::strncmp(path,"rtsps://",8)||!std::strncmp(path,"rtsp://",7)) {
-        const char* start=std::strstr(path,"://")+3;
+bool connectionAddress(const cJSON* connection,char* host,std::size_t capacity,int& port,const char* fallback="") {
+    const auto* ip=obj(connection,"ip");if(cJSON_IsArray(ip))ip=cJSON_GetArrayItem(ip,0);
+    if(!put(host,capacity,cJSON_IsString(ip)?ip->valuestring:fallback))return false;
+    port=num(connection,"port");
+    if(const char* scheme=std::strstr(str(connection,"resourcePath"),"://")) {
+        const char* start=scheme+3;
         const char* end=start;
         if(*start=='['){end=std::strchr(start,']');if(!end)return false;++end;}
         else while(*end&&*end!=':'&&*end!='/')++end;
         if(end==start||end-start>253)return false;
         for(const char* p=start;p<end;++p)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||*p=='.'||*p=='-'||*p==':'||*p=='['||*p==']'))return false;
-        const int n=std::snprintf(out,capacity,"wss://%.*s/nvst/",static_cast<int>(end-start),start);
+        if(!cJSON_IsString(ip)) {
+            if(static_cast<std::size_t>(end-start)>=capacity)return false;
+            std::memcpy(host,start,end-start);host[end-start]=0;
+        }
+        if(port<=0&&*end==':') {
+            char* tail=nullptr;long parsed=std::strtol(end+1,&tail,10);
+            if(tail==end+1||(*tail&&*tail!='/')||parsed<1||parsed>65535)return false;
+            port=static_cast<int>(parsed);
+        }
+    }
+    for(const char* p=host;*p;++p)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||*p=='.'||*p=='-'||*p==':'||*p=='['||*p==']'))return false;
+    return *host&&port>=0&&port<=65535;
+}
+bool signalingAddress(char* out,std::size_t capacity,const cJSON* connection,const char* fallback="") {
+    const char* path=str(connection,"resourcePath");
+    if(!std::strncmp(path,"wss://",6))return put(out,capacity,path);
+    if(!std::strncmp(path,"https://",8)){return std::snprintf(out,capacity,"wss://%s",path+8)>0&&std::strlen(path)-2<capacity;}
+    char host[256];int port=0;
+    if(!connectionAddress(connection,host,sizeof(host),port,fallback))return false;
+    if(!std::strncmp(path,"rtsps://",8)||!std::strncmp(path,"rtsp://",7)) {
+        const int n=std::snprintf(out,capacity,"wss://%s/nvst/",host);
         return n>0&&static_cast<std::size_t>(n)<capacity;
     }
-    const auto* ip=obj(connection,"ip");if(cJSON_IsArray(ip))ip=cJSON_GetArrayItem(ip,0);
-    if(!cJSON_IsString(ip)||!ip->valuestring[0])return false;
-    const char* host=ip->valuestring;
-    for(const char* p=host;*p;++p)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||*p=='.'||*p=='-'))return false;
-    int port=num(connection,"port",443);if(port<1||port>65535)return false;
+    if(!port)port=443;
     if(*path&&(*path!='/'||path[1]=='/'))return false;
     int n=std::snprintf(out,capacity,"wss://%s:%d%s",host,*path?port:443,*path?path:"/nvst/");
     return n>0&&static_cast<std::size_t>(n)<capacity;
@@ -81,7 +97,8 @@ void Cloud::load(const char* jwt,const char* device,const char* search,bool next
         if(r.error){fail(r.error);return;}Json j(r);
         const cJSON* entry;cJSON_ArrayForEach(entry,obj(obj(j.p,"gfnServiceInfo"),"gfnServiceEndpoints")) {
             if(!std::strcmp(str(entry,"idpId"),"PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg")) {
-                if(trustedCloudUrl(str(entry,"streamingServiceUrl")))copy(base_,str(entry,"streamingServiceUrl"));break;
+                if(trustedCloudUrl(str(entry,"streamingServiceUrl")))copy(base_,str(entry,"streamingServiceUrl"));
+                break;
             }
         }
         if(!*base_){fail("NVIDIA streaming endpoint unavailable");return;}
@@ -150,7 +167,9 @@ void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,int user
 }
 bool Cloud::parseSession(const Response& r) noexcept {
     if(r.error){fail(r.error);return false;}Json root(r);auto* sess=obj(root.p,"session");
-    if(r.status<200||r.status>=300||num(obj(root.p,"requestStatus"),"statusCode",-1)!=1){char text[192];const auto* status=obj(root.p,"requestStatus");
+    const auto* requestStatus=obj(root.p,"requestStatus");
+    const bool patching=num(requestStatus,"statusCode")==41&&std::strstr(str(requestStatus,"statusDescription"),"APP_PATCHING_STATUS");
+    if(!patching&&(r.status<200||r.status>=300||num(requestStatus,"statusCode",-1)!=1)){char text[192];const auto* status=requestStatus;
         // Only bounded error fields reach the UI. Never log the response/token/session ID.
         std::snprintf(text,sizeof(text),"HTTP %ld code %d / %.64s / unified %.24s / session %d",
             r.status,num(status,"statusCode",-1),str(status,"statusDescription"),
@@ -160,16 +179,30 @@ bool Cloud::parseSession(const Response& r) noexcept {
     if(*str(sess,"sessionId")&&safeId(str(sess,"sessionId")))copy(session_.id,str(sess,"sessionId"));
     if(!*session_.id){fail("Cloud session response missing ID");return false;}
     const auto* status=obj(sess,"status");int state=cJSON_IsNumber(status)?status->valueint:-1;
-    if(cJSON_IsString(status)){auto* s=status->valuestring;if(!std::strcmp(s,"queued"))state=0;else if(!std::strcmp(s,"ready")||!std::strcmp(s,"active"))state=2;else if(!std::strcmp(s,"streaming")||!std::strcmp(s,"playing"))state=3;else if(!std::strcmp(s,"provisioning")||!std::strcmp(s,"initializing")||!std::strcmp(s,"setup")||!std::strcmp(s,"launching"))state=1;}
-    if(state==4||state==5){fail("Cloud session ended");return false;}
+    if(cJSON_IsString(status)){auto* s=status->valuestring;if(!std::strcmp(s,"queued"))state=0;else if(!std::strcmp(s,"ready")||!std::strcmp(s,"active"))state=2;else if(!std::strcmp(s,"streaming")||!std::strcmp(s,"playing"))state=3;else if(!std::strcmp(s,"provisioning")||!std::strcmp(s,"initializing")||!std::strcmp(s,"setup")||!std::strcmp(s,"launching"))state=1;else if(!std::strcmp(s,"resuming"))state=6;else if(!std::strcmp(s,"finished"))state=7;}
+    if(state==4||state==5){fail("Cloud session paused. Stop it before launching again");return false;}
+    if(state==7){fail("Cloud session ended");return false;}
     if(*str(sess,"signalingUrl"))copy(session_.signaling,str(sess,"signalingUrl"));
     if(*str(sess,"serverIp"))copy(session_.mediaIp,str(sess,"serverIp"));
+    const auto* control=obj(sess,"sessionControlInfo");
+    if(!*session_.mediaIp) {char ip[sizeof(session_.mediaIp)];int port=0;if(connectionAddress(control,ip,sizeof(ip),port))copy(session_.mediaIp,ip);}
     const cJSON* conn;cJSON_ArrayForEach(conn,obj(sess,"connectionInfo")) {
-        if((num(conn,"usage")==14||num(conn,"usage")==16)&&!*session_.signaling)signalingAddress(session_.signaling,sizeof(session_.signaling),conn);
-        if(num(conn,"usage")==2||num(conn,"usage")==17){const auto* ip=obj(conn,"ip");if(cJSON_IsArray(ip))ip=cJSON_GetArrayItem(ip,0);if(cJSON_IsString(ip))copy(session_.mediaIp,ip->valuestring);session_.mediaPort=num(conn,"port");}
+        if((num(conn,"usage")==14||num(conn,"usage")==16)&&!*session_.signaling)signalingAddress(session_.signaling,sizeof(session_.signaling),conn,session_.mediaIp);
     }
-    if((state==2||state==3)&&*session_.signaling){view_.state=CloudState::ready;copy(view_.message,"Cloud session ready. Connecting stream...");}
-    else if(state==6){fail("Session requires an advertisement step not yet supported");return false;}
+    if(!*session_.signaling&&control)signalingAddress(session_.signaling,sizeof(session_.signaling),control,session_.mediaIp);
+    for(int usage:{2,17,14}) {
+        char bestIp[sizeof(session_.mediaIp)]{};int bestPort=0;
+        cJSON_ArrayForEach(conn,obj(sess,"connectionInfo")) {
+            if(num(conn,"usage")!=usage)continue;
+            char ip[sizeof(session_.mediaIp)];int port=0;
+            if(connectionAddress(conn,ip,sizeof(ip),port,usage==14?session_.mediaIp:"")&&port>0&&(usage!=14||port>bestPort)) {
+                copy(bestIp,ip);bestPort=port;
+            }
+        }
+        if(bestPort){copy(session_.mediaIp,bestIp);session_.mediaPort=bestPort;break;}
+    }
+    if(patching||state==6){view_.state=CloudState::queued;copy(view_.message,patching?"Server patching game. Waiting for launch...":"Cloud session resuming. Waiting for server...");}
+    else if((state==2||state==3)&&*session_.signaling){view_.state=CloudState::ready;copy(view_.message,"Cloud session ready. Connecting stream...");}
     else if(state<0||state>3){fail("Unknown cloud session state");return false;}
     else {
         view_.state=CloudState::queued;
@@ -188,7 +221,7 @@ void Cloud::tick(const char* jwt,const char* device,std::uint64_t now) noexcept 
     parseSession(request_(context_,"GET",url,nullptr,jwt,device));
 }
 bool Cloud::stop(const char* jwt,const char* device) noexcept {
-    if(*session_.id){char url[768];std::snprintf(url,sizeof(url),"%sv2/session/%s",base_,session_.id);auto r=request_(context_,"DELETE",url,nullptr,jwt,device);if(r.error||(r.status!=404&&(r.status<200||r.status>=300))){fail("Unable to stop cloud session. Press CIRCLE to retry");return false;}}
+    if(*session_.id){char url[768];std::snprintf(url,sizeof(url),"%sv2/session/%s",base_,session_.id);auto r=request_(context_,"DELETE",url,nullptr,jwt,device);if(r.error||((r.status!=404&&r.status!=410)&&(r.status<200||r.status>=300))){fail("Unable to stop cloud session. Retry STOP SESSION");return false;}}
     secureErase(&session_,sizeof(session_));view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");return true;
 }
 }
