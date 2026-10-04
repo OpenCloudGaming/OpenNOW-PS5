@@ -248,3 +248,23 @@ Console .026 startup passes depth-three qualification: 32 submitted and complete
 After 130 seconds, a 10.008-second loaded 4K120 HDR-requested interval receives, decodes and presents 92.13 pictures/s at 3840 × 2160 and 52.15 Mbps. There are zero queue overflows/resets, RTP/AU losses, API errors or surface-pool blocks in the interval. Pipeline depth three and worker mask 0x3ff remain active, with two pending inputs. Native API occupancy averages 1.573 ms per decode call and GPU import/draw 0.61 ms; this is overlapping submission throughput, not a measured 1.573 ms input-to-decoded-picture latency. The user reports that motion now looks fluid. A later snapshot at 284 seconds still records no losses, queue overflows/resets or API errors. The app keeps pace with this live source, a substantial improvement from the prior roughly 31 FPS loaded intervals. GFN still supplies approximately 92 rather than 120 pictures/s and signals Main10 SDR BT.709. The final real-4K120-HDR objective remains unfulfilled; in-game FPS/VSync/HDR settings have been requested while negotiation is inspected.
 
 The user subsequently disables in-game VSync and raises the game's FPS limit from 120 to 240; no in-game HDR option is visible. A new 10.007-second interval still receives, decodes and draws 92.43 pictures/s at 3840 × 2160 and 51.13 Mbps, with zero queue drops/resets, RTP/AU loss, API errors or pool blocks. Native API occupancy averages 1.202 ms and GPU import/draw 0.55 ms. At 1170.69 seconds of session time, cumulative loss, queue drops, resets and API errors remain zero. The game's new limit therefore does not establish a 120 FPS source in this test. The `presented` counter records successful application GPU draws before the renderer's subsequent buffer swap; these measurements are not independently calibrated physical screen cadence or end-to-end latency. The remaining source cadence/HDR cause is unresolved; a same-game comparison with the official Mac client's stream statistics has been requested.
+
+### .027 persistent NVIDIA login
+
+Public prerelease `0.0.2-alpha` adds an owner-only NVIDIA credential cache at
+`/data/opennow/account.bin`, outside the title replaced during updates. The device identity
+is restored with the account. Client-token renewal falls back to OAuth refresh when
+available, preserves an omitted identity token, and saves rotated credentials before
+further network requests. Transient network/server errors preserve disk credentials and
+retry. Explicit sign-out removes the cache; app closure and game-session stop retain it.
+Native storage binds directly to libkernel and synchronizes the file and parent directory.
+Authentication renewal runs between games to avoid blocking media processing.
+
+Host ASan/UBSan tests cover process restart, token rotation and fallback, temporary errors,
+malformed responses, corrupt caches, failed replacement, owner-only permissions and
+sign-out. Existing port regressions and the VPS GPU build/import audit pass. On 2026-10-04,
+after confirming the OpenNOW sandbox was absent, the complete previous .026 title was
+preserved locally and in a console rollback directory. All 31 staged and activated .027
+files were read back and SHA-256 verified in confirmed raw SELF mode. Fresh sign-in,
+relaunch, full console reboot and subsequent update acceptance remain unverified. The
+historical .026 streaming measurements do not establish new .027 performance results.

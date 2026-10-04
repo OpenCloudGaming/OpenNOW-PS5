@@ -12,7 +12,7 @@ An experimental native PS5 homebrew client for GeForce NOW, based on the public 
 
 **This is a working, console-tested prototype, not a finished application.** You can sign in, launch a game and play. The interface is still rough and primarily exists to test that authentication, streaming, audio, video and controls work together. Expect an incomplete user experience, limited navigation and functionality that still needs further testing.
 
-**First public release: [0.0.1-alpha](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.1-alpha)** — console-tested development build `00.002.026`, title ID `PPSA99082`. This project is unofficial and unaffiliated with Sony or NVIDIA.
+**Latest prerelease: [0.0.2-alpha](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.2-alpha)** — development build `00.002.027`, title ID `PPSA99082`, with persistent NVIDIA login. This project is unofficial and unaffiliated with Sony or NVIDIA.
 
 ## What works
 
@@ -30,18 +30,18 @@ In the latest console test, a 3840 × 2160 Main10 SDR stream was received, decod
 - **Real 120 FPS and HDR game streaming are not yet validated.** The tested game supplied SDR despite an HDR request. Startup fixture tests passed 4K, 119.88 Hz output and HDR scanout; these checks do not establish sustained game FPS or HDR source content.
 - The 90 FPS profiles are requests; earlier tests received 60 FPS. Server behavior can differ from the selected target.
 - The deeper pipeline currently applies to qualified UHD Main10. H.264 remains at depth one and does not inherit its measured throughput improvement.
-- Saved login and token refresh are not implemented. Audio is stereo only. Broad firmware/loader compatibility and more games still need testing.
+- NVIDIA login is saved and renewed automatically. Persistence through a full console reboot and app replacement still needs live validation. NVIDIA can require sign-in again if renewal credentials expire or are revoked. Audio is stereo only; broader firmware/loader compatibility and more games need testing.
 
 Performance may differ by game, server, network, display and profile. Requested settings are targets, not guaranteed results. See [stream quality](docs/STREAM_QUALITY.md) for the measurements.
 
 ## Install the alpha
 
-1. Download `OpenNOW-PS5-0.0.1-alpha.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
+1. Download `OpenNOW-PS5-0.0.2-alpha.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
 2. Verify the ZIP against its entry in `SHA256SUMS` using `shasum -a 256` or `sha256sum`. If you download every listed asset, you can use `shasum -a 256 -c SHA256SUMS`.
 3. Extract the archive. Install the included `PPSA99082` folder through a compatible native homebrew directory loader, such as ShadowMountPlus. Follow your loader's registration procedure and check that this title ID is unused.
 4. Before replacing an existing installation, close OpenNOW completely and retain a backup of its title folder.
 5. Create `/data/opennow/launch-age.txt` containing your age as an integer from 0 to 120. This personal configuration is required for session requests and is excluded from the release.
-6. Open the app and authenticate using NVIDIA's device authorization page shown on screen.
+6. Open the app and authenticate using NVIDIA's device authorization page shown on screen. Check that `ACCOUNT SAVED` appears. Close through the PS menu to retain the login; Circle from the catalog signs out and removes it.
 
 Requires a PS5 environment that can run native homebrew titles, a GeForce NOW account with suitable streaming capabilities, and a compatible display for the requested mode. The package has been tested in one homebrew console environment; compatibility with other firmware/loader combinations is unverified. This is a directory package, not a retail PS5 store application or a PKG installer.
 
@@ -60,7 +60,9 @@ Requires a PS5 environment that can run native homebrew titles, a GeForce NOW ac
 
 ## Privacy
 
-Account tokens remain in memory and are cleared on sign-out/exit. Public source and packages exclude local configuration, account data, session logs, console dumps and captured gameplay. Private bounded diagnostics can be written under `/data/opennow`; an explicit local marker enables a short video capture for troubleshooting. Do not upload that directory when reporting an issue.
+NVIDIA login credentials and the device identity are saved in `/data/opennow/account.bin`, outside the installed title, so closing the app, rebooting the PS5 and replacing the app preserve the login. The app restores and renews the saved login automatically; temporary network failures keep the saved credentials and retry. CIRCLE in the catalog signs out and removes the saved login; stopping a game session keeps it. NVIDIA can still require a new sign-in if the renewal credentials expire or are revoked. The UI reports `ACCOUNT SAVED` or `ACCOUNT NOT SAVED`. The file uses owner-only permissions and contains sensitive credentials without encryption; keep it private.
+
+Public source and packages exclude local configuration, account data, session logs, console dumps and captured gameplay. Private bounded diagnostics can be written under `/data/opennow`; an explicit local marker enables a short video capture for troubleshooting. Do not upload that directory when reporting an issue.
 
 ## Build and test
 

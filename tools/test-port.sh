@@ -5,6 +5,8 @@ mkdir -p build/host-tests
 ${CC:-cc} -std=c11 -O1 -g -fsanitize=address,undefined -c src/vendor/cJSON.c -o build/host-tests/cJSON.o
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/gfn_test.cpp src/gfn.cpp build/host-tests/cJSON.o -o build/host-tests/gfn-test
 build/host-tests/gfn-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/gfn_persistence_test.cpp src/gfn.cpp build/host-tests/cJSON.o -o build/host-tests/gfn-persistence-test
+build/host-tests/gfn-persistence-test
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/random_test.cpp src/random.cpp -o build/host-tests/random-test
 build/host-tests/random-test

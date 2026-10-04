@@ -10,6 +10,7 @@ struct Fake {
     std::vector<Reply> replies;
     unsigned calls=0;
     static opennow::Response request(void* p,const char* method,const char* url,const char* body,const char* bearer,const char*) {
+        if (std::strstr(url,"/client_token")) return {404,nullptr,0,nullptr};
         auto& self=*static_cast<Fake*>(p); assert(self.calls<self.replies.size());
         if (self.calls==0) { assert(std::strcmp(method,"POST")==0); assert(std::strstr(url,"/device/authorize")); assert(std::strstr(body,"scope=openid%20consent")); }
         if (std::strstr(url,"/userinfo")) { assert(std::strcmp(method,"GET")==0); assert(bearer && std::strcmp(bearer,"test-token")==0); }

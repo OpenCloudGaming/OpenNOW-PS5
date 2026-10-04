@@ -14,6 +14,7 @@ struct View {
     char message[192] = "Press CROSS to sign in with NVIDIA";
     unsigned expiresIn = 0;
     bool profileVerified = false;
+    bool sessionSaved = false;
 };
 struct Response {
     long status = 0;
@@ -25,22 +26,39 @@ using Request = Response (*)(void*, const char*, const char*, const char*, const
 // Request(method, URL, form body, bearer token, device ID). Response owned by transport.
 class Login {
 public:
-    explicit Login(Request request, void* context) noexcept : request_(request), context_(context) {}
+    explicit Login(Request request, void* context, const char* sessionPath = nullptr) noexcept
+        : request_(request), context_(context), sessionPath_(sessionPath) {}
+    bool restore(char (&deviceId)[37], std::uint64_t now) noexcept;
     void begin(const char* deviceId, std::uint64_t now) noexcept;
     void tick(std::uint64_t now) noexcept;
     void cancel() noexcept;
     const View& view() const noexcept { return view_; }
-    const char* cloudToken() const noexcept { return view_.state==State::authenticated ? idToken_ : ""; }
+    const char* cloudToken() const noexcept { return view_.state==State::authenticated ? session_.idToken : ""; }
     ~Login() { erase(); }
 private:
     void erase() noexcept;
     void fail(const char* message, State state = State::failed) noexcept;
+    bool acceptTokens(const Response& response, bool refreshing, std::uint64_t now) noexcept;
+    bool verify(std::uint64_t now) noexcept;
+    void refresh(std::uint64_t now) noexcept;
+    bool save() noexcept;
+    bool forget() noexcept;
     Request request_;
     void* context_;
     View view_{};
     char deviceCode_[2048]{};
-    char accessToken_[16384]{};
-    char idToken_[16384]{};
+    struct Session {
+        char magic[8] = "ONAUTH1";
+        char deviceId[37]{};
+        char accessToken[16384]{};
+        char idToken[16384]{};
+        char refreshToken[16384]{};
+        char clientToken[16384]{};
+        char subject[1024]{};
+    } session_;
+    const char* sessionPath_ = nullptr;
+    std::uint64_t refreshAt_ = 0;
+    bool restoring_ = false;
     std::uint64_t deadline_ = 0, nextPoll_ = 0;
     unsigned interval_ = 5;
 };

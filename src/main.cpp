@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "demo_renderer.hpp"
 #include "gfn.hpp"
+#include "account_file.hpp"
 #include "http.hpp"
 #include "random.hpp"
 #include "cloud.hpp"
@@ -46,7 +47,7 @@ void publish(const opennow::View& v) {
 void* worker(void*) {
     auto& http=*activeHttp;
     // One process-lifetime worker owns these large bounded objects.
-    static opennow::Login login(opennow::Http::request,&http);
+    static opennow::Login login(opennow::Http::request,&http,"/data/opennow/account.bin");
     unsigned char random[16]; char id[37]{};
     if (!opennow::randomBytes(random,sizeof(random)) || !http.ready()) {
         opennow::View v; v.state=State::failed;
@@ -58,6 +59,12 @@ void* worker(void*) {
 #ifndef OPENNOW_HOST_PREVIEW
     static opennow::Stream stream(media);
 #endif
+    if (opennow::accountFile::makeDirectory("/data/opennow",0700)==0)
+        opennow::accountFile::syncParent("/data/opennow");
+    opennow::View restoring; restoring.state=State::requesting;
+    std::snprintf(restoring.message,sizeof(restoring.message),"Checking saved NVIDIA login...");
+    publish(restoring);
+    login.restore(id,sceKernelGetProcessTime()/1000000);
     bool catalogLoaded=false,streamAttempted=false;
 #ifndef OPENNOW_HOST_PREVIEW
     auto profile=opennow::gpu::bestProfile();
@@ -76,12 +83,19 @@ void* worker(void*) {
         }
         if (action==1) {
             http.cancelled.store(false);
+            cloud.reset();catalogLoaded=false;streamAttempted=false;
             opennow::View v; v.state=State::requesting;
             std::snprintf(v.message,sizeof(v.message),"Contacting NVIDIA securely..."); publish(v);
-            login.begin(id,sceKernelGetProcessTime()/1000000);
+            if (!login.restore(id,sceKernelGetProcessTime()/1000000))
+                login.begin(id,sceKernelGetProcessTime()/1000000);
         }
         const auto now=sceKernelGetProcessTime();
+        // Renew between games: blocking login HTTPS must not stall media processing.
+#ifndef OPENNOW_HOST_PREVIEW
+        if (!stream.active()) login.tick(now/1000000);
+#else
         login.tick(now/1000000);
+#endif
         if(login.view().state==State::authenticated) {
             if(!catalogLoaded){publish(login.view());pthread_mutex_lock(&viewMutex);publishedCloud.state=opennow::CloudState::loading;std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Loading NVIDIA catalog...");pthread_mutex_unlock(&viewMutex);cloud.load(login.cloudToken(),id,"Minecraft");catalogLoaded=true;}
             if(action==9&&cloud.view().state==opennow::CloudState::catalog) {
@@ -136,7 +150,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;publishedPad=data;streaming=publishedStream;profile=publishedProfile;pthread_mutex_unlock(&viewMutex);
     if (((!streaming&&(pressed&PS5_PAD_BUTTON_CIRCLE))||(streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD))) && activeHttp) {
         activeHttp->cancelled.store(true); command.store(2);
-    } else if ((pressed&PS5_PAD_BUTTON_CROSS) && v.state!=State::waiting && v.state!=State::requesting && v.state!=State::authenticated) command.store(1);
+    } else if (!streaming && (pressed&PS5_PAD_BUTTON_CROSS) && v.state!=State::waiting && v.state!=State::requesting && v.state!=State::authenticated) command.store(1);
     if(v.state==State::authenticated&&!streaming) {
         if(cv.state==opennow::CloudState::catalog&&(pressed&PS5_PAD_BUTTON_L1))command.store(9);
         if(pressed&PS5_PAD_BUTTON_UP)command.store(3);
@@ -192,13 +206,16 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         char quality[128];std::snprintf(quality,sizeof(quality),"L1 QUALITY: %s",opennow::profileLabel(profile));
         c.text(100,855,quality,3,green);
     }
-    c.text(100,905,v.state==State::authenticated?"CROSS PLAY  SQUARE CATALOG  TRIANGLE MINECRAFT  R1 NEXT  CIRCLE BACK":"CROSS SIGN IN  CIRCLE CANCEL",3,Color::white);
+    c.text(100,905,v.state==State::authenticated?"CROSS PLAY  SQUARE CATALOG  TRIANGLE MINECRAFT  R1 NEXT  CIRCLE SIGN OUT":"CROSS SIGN IN  CIRCLE CANCEL",3,Color::white);
 #ifndef OPENNOW_HOST_PREVIEW
     c.text(100,955,opennow::gpu::outputLabel(),3,green);
 #else
     c.text(100,955,"SDR / STEREO",3,green);
 #endif
-    c.text(100,995,"UNOFFICIAL CLIENT - CLOSE WITH THE PS MENU",3,green);
+    c.text(100,995,v.state==State::authenticated ?
+        (v.sessionSaved ? "ACCOUNT SAVED - CLOSE WITH THE PS MENU" :
+            "ACCOUNT NOT SAVED - CLOSE WITH THE PS MENU") :
+        "UNOFFICIAL CLIENT - CLOSE WITH THE PS MENU",3,green);
     return true;
 }
 }
@@ -211,7 +228,7 @@ int main() {
     std::snprintf(published.message,sizeof(published.message),"Scan the QR code with your phone and sign in");
     published.expiresIn=900;
     if(std::getenv("OPENNOW_PREVIEW_CATALOG")){
-        published.state=State::authenticated;publishedCloud.state=opennow::CloudState::catalog;publishedCloud.count=2;
+        published.state=State::authenticated;published.sessionSaved=true;publishedCloud.state=opennow::CloudState::catalog;publishedCloud.count=2;
         std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Choose a game and store (preview fixtures)");
         std::snprintf(publishedCloud.games[0].title,sizeof(publishedCloud.games[0].title),"Example Game");std::snprintf(publishedCloud.games[0].store,sizeof(publishedCloud.games[0].store),"XBOX");
         std::snprintf(publishedCloud.games[1].title,sizeof(publishedCloud.games[1].title),"Example Game");std::snprintf(publishedCloud.games[1].store,sizeof(publishedCloud.games[1].store),"STEAM");

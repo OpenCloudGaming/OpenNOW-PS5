@@ -32,3 +32,7 @@ dist/
 *.sprx
 *.prx
 *.pkg
+
+# Local NVIDIA authentication cache (never package or commit).
+account.bin
+account.bin.tmp
