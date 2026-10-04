@@ -7,6 +7,7 @@ ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined
 build/host-tests/gfn-test
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/gfn_persistence_test.cpp src/gfn.cpp build/host-tests/cJSON.o -o build/host-tests/gfn-persistence-test
 build/host-tests/gfn-persistence-test
+bash tools/test-app-storage.sh
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/random_test.cpp src/random.cpp -o build/host-tests/random-test
 build/host-tests/random-test

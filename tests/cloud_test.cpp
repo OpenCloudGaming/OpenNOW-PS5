@@ -58,6 +58,35 @@ int main(){
  c.launch("fixture-jwt","fixture-device",11);assert(m.posts==1);
  c.tick("fixture-jwt","fixture-device",12);assert(c.view().state==CloudState::queued);c.tick("fixture-jwt","fixture-device",13);assert(c.view().state==CloudState::ready);
  assert(c.stop("fixture-jwt","fixture-device")&&m.deletes==1);assert(!*c.session().id);assert(c.view().state==CloudState::catalog);
+ {
+  Mock transition;
+  transition.created=R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":1,"sessionControlInfo":{"ip":"control.geforcenow.com","port":443}}})";
+  transition.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2,"sessionControlInfo":{"ip":"control.geforcenow.com","port":443},"connectionInfo":[{"usage":14,"ip":"stream.geforcenow.com","resourcePath":"/nvst/","port":48322}]}})";
+  Cloud client(request,&transition);client.load("fixture-jwt","fixture-device");client.launch("fixture-jwt","fixture-device",20);
+  assert(client.view().state==CloudState::queued);
+  assert(client.session().signalingSource==SignalingSource::sessionControl);
+  client.tick("fixture-jwt","fixture-device",23);
+  assert(client.view().state==CloudState::ready);
+  assert(!std::strcmp(client.session().signaling,"wss://stream.geforcenow.com:443/nvst/"));
+  assert(client.session().signalingSource==SignalingSource::streamConnection);
+  assert(!std::strcmp(client.session().mediaIp,"stream.geforcenow.com"));
+  assert(client.session().mediaPort==48322);
+  assert(client.stop("fixture-jwt","fixture-device"));
+  transition.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2}})";
+  client.launch("fixture-jwt","fixture-device",30);client.tick("fixture-jwt","fixture-device",33);
+  assert(client.view().state==CloudState::queued);
+  assert(!*client.session().signaling&&!*client.session().mediaIp&&client.session().mediaPort==0);
+  assert(client.session().signalingSource==SignalingSource::none);
+  assert(client.stop("fixture-jwt","fixture-device"));
+  transition.created=R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":1,"connectionInfo":[{"usage":14,"ip":"old.geforcenow.com","port":48322}]}})";
+  transition.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2,"sessionControlInfo":{"ip":"new.geforcenow.com","port":443}}})";
+  client.launch("fixture-jwt","fixture-device",40);client.tick("fixture-jwt","fixture-device",43);
+  assert(client.view().state==CloudState::ready);
+  assert(!std::strcmp(client.session().signaling,"wss://new.geforcenow.com:443/nvst/"));
+  assert(client.session().signalingSource==SignalingSource::sessionControl);
+  assert(!std::strcmp(client.session().mediaIp,"new.geforcenow.com")&&client.session().mediaPort==0);
+  assert(client.stop("fixture-jwt","fixture-device"));
+ }
  for(const char* address:{
  R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"rtsps://stream.geforcenow.com:48322","port":48322}]}})",
  R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"rtsp://stream.geforcenow.com:322"}]}})"}){
@@ -65,6 +94,7 @@ int main(){
  }
  struct NetworkCase {const char* response;const char* signaling;const char* ip;int port;};
  for(const auto& fixture:{
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":16,"ip":"control.geforcenow.com","resourcePath":"/control/","port":443},{"usage":14,"ip":"stream.geforcenow.com","resourcePath":"/nvst/","port":48322}]}})","wss://stream.geforcenow.com:443/nvst/","stream.geforcenow.com",48322},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.16","resourcePath":"/nvst/","port":48010}]}})","wss://203.0.113.16:443/nvst/","203.0.113.16",48010},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"wss://stream.geforcenow.com:8443/nvst/","port":48322}]}})","wss://stream.geforcenow.com:8443/nvst/","stream.geforcenow.com",48322},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"sessionControlInfo":{"ip":"control.geforcenow.com","port":443}}})","wss://control.geforcenow.com:443/nvst/","control.geforcenow.com",0},

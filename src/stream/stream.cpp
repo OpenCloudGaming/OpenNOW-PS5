@@ -6,6 +6,7 @@ extern "C" {
 }
 #include "../vendor/cJSON.h"
 #include "../random.hpp"
+#include "../app_storage.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -32,8 +33,8 @@ void be(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes
 }
 bool Stream::start(const Session& s,const char* device) {
  qos_={};nextQos_=0;qosRequested_=false;
- stop();opennow_media_note("START 00.002.038");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
- capture_.arm("/data/opennow",settings_.codec==VideoCodec::hevc,sceKernelGetProcessTime());
+ stop();opennow_media_note("START 00.002.039");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
+ capture_.arm(OPENNOW_STORAGE_ROOT,settings_.codec==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){fail("Invalid secure signaling endpoint");release();return false;}
  if(!media_.start(settings_)){fail("Could not initialize video decoder / audio output");release();return false;}
  if(peer_init()!=0){fail("WebRTC runtime initialization failed");release();return false;}runtimeReady_=true;
@@ -47,7 +48,16 @@ bool Stream::start(const Session& s,const char* device) {
  std::string url=s.signaling;auto q=url.find_first_of("?#");if(q!=std::string::npos)url.resize(q);while(url.size()&&url.back()=='/')url.pop_back();if(url.size()<7||url.substr(url.size()-7)!="sign_in")url+="/sign_in";
  url+="?peer_id="+name_+"&version=2&peer_role=1&pairing_id="+s.id;
  ws_=new WebSocketClient(url);ws_->set_custom_headers({"Origin: https://play.geforcenow.com",std::string("Sec-WebSocket-Protocol: x-nv-sessionid.")+s.id,"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"});ws_->set_on_message([this](const std::string& m){message(m);});
- if(!ws_->connect()){opennow_media_note(ws_->get_last_error().c_str());fail(("Signaling: "+ws_->get_last_error()).c_str());release();return false;}
+ const char* route="none";
+ switch(s.signalingSource){
+ case SignalingSource::none:break;
+ case SignalingSource::explicitUrl:route="explicit";break;
+ case SignalingSource::streamConnection:route="stream";break;
+ case SignalingSource::alternateConnection:route="alternate";break;
+ case SignalingSource::sessionControl:route="control";break;
+ }
+ char diagnostic[192];std::snprintf(diagnostic,sizeof(diagnostic),"SIGNALING route=%s",route);opennow_media_note(diagnostic);
+ if(!ws_->connect()){std::snprintf(diagnostic,sizeof(diagnostic),"Signaling: %s [route=%s]",ws_->get_last_error().c_str(),route);opennow_media_note(diagnostic);fail(diagnostic);release();return false;}
  peerInfo();std::snprintf(status_,sizeof(status_),"Waiting for NVIDIA stream offer");return true;
 }
 void Stream::fail(const char* reason){if(!failed_){failed_=true;std::snprintf(status_,sizeof(status_),"%s",reason);}}
@@ -113,7 +123,7 @@ void Stream::tick(std::uint64_t now){if(!active())return;if(entropyFailed)fail("
 for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
  if(failed_){release();return;}
  recoverVideoLoss();
- capture_.poll("/data/opennow",settings_.codec==VideoCodec::hevc,now);
+ capture_.poll(OPENNOW_STORAGE_ROOT,settings_.codec==VideoCodec::hevc,now);
  // The existing input stream stays on SID 0. QoS uses the source-pinned,
  // unordered 300 ms NVST control stream on SID 6, after DCEP acknowledgment.
  if(inputReady_&&!qosRequested_){
@@ -144,8 +154,8 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
     stats.packets_received,stats.access_units_completed,stats.access_units_dropped,media_.frames.load(),media_.decodeError.load(),media_.audioPackets.load(),media_.audioErrors.load());
    // Replace a small private snapshot, so late symptoms remain observable after
    // the bounded startup media log has filled. No session/network secrets.
-   if(auto* live=std::fopen("/data/opennow/live-video.status","wb")){
-    std::fprintf(live,"version=00.002.038 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
+   if(auto* live=std::fopen(OPENNOW_STORAGE_ROOT "/live-video.status","wb")){
+    std::fprintf(live,"version=00.002.039 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
      static_cast<unsigned long long>(now-started_),media_.decodedWidth.load(),media_.decodedHeight.load(),media_.videoBytes.load(),media_.frames.load(),media_.presented.load(),media_.decodeError.load(),media_.actualHdr.load(),stats.access_units_dropped,stats.sequence_gaps,media_.queueDrops.load(),media_.recoveryResets.load(),peer_connection_datachannel_is_open(pc_,6),qos_.queuedCount(),capture_.bytes(),capture_.done());
     std::fprintf(live,"au_received=%u queue_depth=%u queue_peak=%u queue_max_us=%llu decode_calls=%u decode_us=%llu decode_max_us=%llu gpu_calls=%u gpu_us=%llu gpu_max_us=%llu\n",
      stats.access_units_completed,media_.queueDepth.load(),media_.queuePeak.load(),static_cast<unsigned long long>(media_.queueMaxUs.load()),media_.decodeCalls.load(),static_cast<unsigned long long>(media_.decodeUs.load()),static_cast<unsigned long long>(media_.decodeMaxUs.load()),media_.gpuCalls.load(),static_cast<unsigned long long>(media_.gpuUs.load()),static_cast<unsigned long long>(media_.gpuMaxUs.load()));

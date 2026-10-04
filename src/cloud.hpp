@@ -5,6 +5,7 @@
 namespace opennow {
 struct Game { char id[96]{}, title[160]{}, store[48]{}; };
 enum class CloudState { idle, loading, catalog, starting, queued, ready, failed };
+enum class SignalingSource { none, explicitUrl, streamConnection, alternateConnection, sessionControl };
 struct CloudView {
     CloudState state=CloudState::idle;
     Game games[60]{};
@@ -15,6 +16,7 @@ struct CloudView {
 struct Session {
     char id[128]{}, signaling[1024]{}, mediaIp[128]{};
     int mediaPort=0;
+    SignalingSource signalingSource=SignalingSource::none;
     StreamProfile profile=StreamProfile::quality;
 };
 class Cloud {
