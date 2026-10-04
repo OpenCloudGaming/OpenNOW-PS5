@@ -6,7 +6,8 @@
 
 <p align="center">
   Native GeForce NOW cloud gaming on PlayStation 5.<br />
-  An open-source homebrew client from <a href="https://github.com/OpenCloudGaming">Open Cloud Gaming</a>.
+  Original PS5 port by <a href="https://github.com/Portablelle">Portablelle</a>.<br />
+  Development continues at <a href="https://github.com/OpenCloudGaming">Open Cloud Gaming</a>.
 </p>
 
 <p align="center">
@@ -25,6 +26,8 @@
 </p>
 
 OpenNOW PS5 lets you sign in to NVIDIA, browse the GeForce NOW catalog, and stream games with native hardware video decoding, GPU presentation, and DualSense controls. It builds on the public [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) projects.
+
+**Credit for the original PS5 port and the base this repository builds on goes to [Portablelle](https://github.com/Portablelle).** He started the project in [Portablelle/OpenNOW-PS5](https://github.com/Portablelle/OpenNOW-PS5). This repository continues his work under Open Cloud Gaming.
 
 **This is an experimental, console-tested alpha.** It requires a PS5 that can run native homebrew. It is not a retail PlayStation application and is not affiliated with Sony or NVIDIA. Expect bugs, incomplete features, and limited firmware and loader coverage.
 
@@ -141,7 +144,9 @@ Some tooling guides describe optional workflows inherited from the native applic
 
 ## Credits and license
 
-Development continues here under [Open Cloud Gaming](https://github.com/OpenCloudGaming), following the [original PS5 repository](https://github.com/Portablelle/OpenNOW-PS5). Thanks to the [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) and [OpenNOW-Switch](https://github.com/OpenCloudGaming/OpenNOW-Switch) authors and contributors for the authentication, streaming protocol, and transport foundations.
+[Portablelle](https://github.com/Portablelle) created the original PS5 port and established the base for this project. **The original PS5 work is his.** Development continues here under [Open Cloud Gaming](https://github.com/OpenCloudGaming), with the [original repository](https://github.com/Portablelle/OpenNOW-PS5) and its commit history preserved as the project's starting point.
+
+Thanks also to the [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) and [OpenNOW-Switch](https://github.com/OpenCloudGaming/OpenNOW-Switch) authors and contributors for the authentication, streaming protocol, and transport foundations.
 
 The PS5 platform, decoder, and GPU work also builds on ProsperoLight, public PS5 hardware-video research, Kodi PS5, ps5-opengl, and the native application boilerplate. Their roles, licenses, and source revisions remain in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), [upstream-lock.json](upstream-lock.json), and the source headers.
 
