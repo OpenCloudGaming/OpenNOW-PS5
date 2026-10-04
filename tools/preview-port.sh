@@ -24,7 +24,7 @@ done
 scenes=(signin-idle signin-requesting signin-code signin-failed library library-art-loading library-loading library-scanning library-empty library-error
     library-page-error browse browse-row2 browse-long browse-loading-more search detail detail-hardware settings
     settings-stream settings-save-error settings-display settings-account settings-signout settings-about starting
-    queued connecting cleanup-failed stream-ended launch-failed)
+    queued connecting keyboard keyboard-modifiers keyboard-waiting cleanup-failed stream-ended launch-failed)
 for scene in "${scenes[@]}"; do
     OPENNOW_PREVIEW_SCENE=$scene build/host-tests/preview
     if command -v sips >/dev/null; then
