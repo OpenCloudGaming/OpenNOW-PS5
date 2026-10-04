@@ -33,12 +33,14 @@ void requestStop() noexcept;
 class Canvas final
 {
   public:
+    enum class Button : std::uint8_t { up, down, dpad, cross, circle, square, triangle, l1, r1, options };
     void clear(Color color) noexcept;
     void image(unsigned x,unsigned y,unsigned width,unsigned height,const std::uint32_t*) noexcept;
     void rectangle(unsigned x, unsigned y, unsigned width, unsigned height, Color color) noexcept;
     void circle(unsigned center_x, unsigned center_y, unsigned radius, Color color) noexcept;
     void triangle(unsigned center_x, unsigned top, unsigned half_width, unsigned height,
                   Color color) noexcept;
+    void button(unsigned x, unsigned y, Button button, unsigned size, Color color) noexcept;
     void text(unsigned x, unsigned y, std::string_view value, unsigned scale, Color color) noexcept;
 
   private:

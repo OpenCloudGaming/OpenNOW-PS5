@@ -283,3 +283,21 @@ the ALPHA launcher icon after reboot and the home-screen background without a
 further reboot once its missing registered background references were repaired.
 That title-specific repair is private and is not included in the release package.
 No new streaming performance or HDR acceptance is claimed.
+
+## 00.002.032 controller icons and search keyboard
+
+Controller hints now use antialiased outline symbols of consistent size, with
+labels aligned in shared columns. Search has separate underscore and SPACE keys;
+the redundant space legend is removed. Navigation wraps through the additional
+space row. Catalog and search previews were visually checked, the keyboard
+regression passed with ASan/UBSan, and the VPS GPU build/import audit passed.
+All 32 installed files were SHA-256 verified with the previous title retained.
+The user confirmed the resulting console UI.
+
+A private, title-specific launcher repair restored one missing background
+reference and added persistent database guards for NULL updates and reinsertion
+of that OpenNOW entry. Tests on a database copy verified both recovery paths,
+preservation of unrelated rows and database integrity. Console read-back verified
+the reference and guards; the user confirmed the background works. Acceptance
+after a full console reboot remains unverified. The repair and its rollback
+backup are console-local and are not part of the application package.

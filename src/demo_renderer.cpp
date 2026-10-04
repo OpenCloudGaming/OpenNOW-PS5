@@ -16,6 +16,8 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cmath>
+#include <algorithm>
 #include <cstdlib>
 #include <cstddef>
 #include <cstdint>
@@ -421,6 +423,102 @@ void Canvas::triangle(unsigned center_x, unsigned top, unsigned half_width, unsi
                       Color color) noexcept
 {
     fill_triangle(pixels_, center_x, top, half_width, height, color);
+}
+
+void Canvas::button(unsigned x, unsigned y, Button button, unsigned size, Color color) noexcept
+{
+    if (size < 16) return;
+    // Draw every symbol in the same square, using thin, antialiased outlines.
+    const auto line = [](float px, float py, float ax, float ay, float bx, float by) {
+        const float dx = bx - ax, dy = by - ay;
+        const float t = std::clamp(((px - ax) * dx + (py - ay) * dy) /
+                                  (dx * dx + dy * dy), 0.0f, 1.0f);
+        return std::hypot(px - ax - t * dx, py - ay - t * dy);
+    };
+    for (unsigned row = 0; row < size && y + row < frame_height; ++row)
+    {
+        for (unsigned column = 0; column < size && x + column < frame_width; ++column)
+        {
+            unsigned coverage = 0;
+            for (unsigned sy = 0; sy < 4; ++sy)
+            for (unsigned sx = 0; sx < 4; ++sx)
+            {
+                const float px = (column + (sx + 0.5f) / 4) / size;
+                const float py = (row + (sy + 0.5f) / 4) / size;
+                bool ink = false;
+                switch (button)
+                {
+                case Button::cross:
+                    ink = std::min(line(px, py, .23f, .23f, .77f, .77f),
+                                   line(px, py, .77f, .23f, .23f, .77f)) < .035f;
+                    break;
+                case Button::circle:
+                    ink = std::abs(std::hypot(px - .5f, py - .5f) - .32f) < .035f;
+                    break;
+                case Button::square:
+                    ink = std::abs(std::max(std::abs(px - .5f), std::abs(py - .5f)) - .30f) < .035f;
+                    break;
+                case Button::triangle:
+                    ink = std::min({line(px, py, .5f, .16f, .85f, .78f),
+                                    line(px, py, .85f, .78f, .15f, .78f),
+                                    line(px, py, .15f, .78f, .5f, .16f)}) < .035f;
+                    break;
+                case Button::up:
+                case Button::down:
+                {
+                    const float qy = button == Button::up ? py : 1 - py;
+                    ink = std::min({line(px, qy, .25f, .46f, .5f, .21f),
+                                    line(px, qy, .5f, .21f, .75f, .46f),
+                                    line(px, qy, .5f, .21f, .5f, .79f)}) < .035f;
+                    break;
+                }
+                case Button::dpad:
+                    // Four distinct direction arrows, matching the controller's D-pad.
+                    for (unsigned turn = 0; turn < 4; ++turn)
+                    {
+                        const float qx = turn == 0 ? px : turn == 1 ? py : turn == 2 ? 1-px : 1-py;
+                        const float qy = turn == 0 ? py : turn == 1 ? 1-px : turn == 2 ? 1-py : px;
+                        ink |= std::min({line(qx,qy,.38f,.28f,.5f,.16f),
+                                         line(qx,qy,.5f,.16f,.62f,.28f),
+                                         line(qx,qy,.5f,.16f,.5f,.37f)}) < .027f;
+                    }
+                    break;
+                case Button::options:
+                    for (float yy : {.30f, .50f, .70f})
+                        ink |= line(px, py, .25f, yy, .75f, yy) < .03f;
+                    break;
+                case Button::l1:
+                case Button::r1:
+                {
+                    const float qx = std::max(std::abs(px-.5f)-.32f, 0.0f);
+                    const float qy = std::max(std::abs(py-.5f)-.20f, 0.0f);
+                    ink = std::abs(std::hypot(qx,qy)-.09f) < .025f;
+                    break;
+                }
+                }
+                coverage += ink;
+            }
+            if (!coverage) continue;
+            const auto offset = linear_canvas ? std::size_t((y+row)*frame_width+x+column)*4 :
+                                                tiled_byte_offset(x+column, y+row);
+            const auto base = *reinterpret_cast<const std::uint32_t *>(
+                reinterpret_cast<const std::uint8_t *>(pixels_) + offset);
+            std::uint32_t blended = 0xff000000;
+            for (unsigned shift : {0U, 8U, 16U})
+            {
+                const unsigned foreground = (static_cast<std::uint32_t>(color) >> shift) & 255U;
+                const unsigned background = (base >> shift) & 255U;
+                blended |= ((foreground * coverage + background * (16-coverage) + 8) / 16) << shift;
+            }
+            put_pixel_unchecked(pixels_, x+column, y+row, static_cast<Color>(blended));
+        }
+    }
+    if (button == Button::l1 || button == Button::r1)
+    {
+        const unsigned scale = size / 20;
+        draw_text(pixels_, x + (size - 11*scale)/2, y + (size - 7*scale)/2,
+                  button == Button::l1 ? "L1" : "R1", scale, color);
+    }
 }
 
 void Canvas::text(unsigned x, unsigned y, std::string_view value, unsigned scale,

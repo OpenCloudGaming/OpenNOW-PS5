@@ -32,6 +32,7 @@ int scePthreadAttrDestroy(void**);
 }
 namespace {
 using opennow::State;
+using ps5::demo::Canvas;
 opennow::View published;
 opennow::CloudView publishedCloud;
 PS5_PadData publishedPad{};
@@ -216,6 +217,16 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     if (!first && !searchChanged && !searchInput.open && std::memcmp(&previous,&v,sizeof(v))==0&&std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&previousProfile==profile) return false;
     first=false; previous=v;previousCloud=cv;previousProfile=profile;
     const auto bg=static_cast<Color>(0xff1c1610), green=static_cast<Color>(0xff9ee656);
+    const auto control=[&](unsigned x,unsigned y,Canvas::Button button,std::string_view label,Color color){
+        c.button(x,y,button,48,color);
+        c.text(x+64,y+14,label,3,color);
+    };
+    const auto signOut=[&](unsigned x,unsigned y){
+        c.button(x,y,Canvas::Button::l1,48,green);
+        c.text(x+58,y+14,"+",3,green);
+        c.button(x+84,y,Canvas::Button::r1,48,green);
+        c.text(x+148,y+14,"SIGN OUT",3,green);
+    };
     c.clear(bg);
     static std::uint32_t logo[180*180]{};
     static bool logoChecked=false,logoLoaded=false;
@@ -259,45 +270,58 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         }
     } else if (v.state==State::authenticated) {
         if(cv.state==opennow::CloudState::catalog){
-            char position[160];
-            std::snprintf(position,sizeof(position),"UP/DOWN SELECT | %u/%u STORE ENTRIES | %s",
-                cv.count?cv.selected+1:0,cv.count,
-                cv.hasNext?"R1 NEXT CATALOG PAGE":"LAST CATALOG PAGE");
-            c.text(100,445,position,3,green);
+            c.button(100,432,Canvas::Button::up,48,green);
+            c.button(148,432,Canvas::Button::down,48,green);
+            c.text(212,446,"SELECT GAME",3,green);
+            char position[96];
+            std::snprintf(position,sizeof(position),"%u/%u STORE ENTRIES",
+                cv.count?cv.selected+1:0,cv.count);
+            c.text(540,446,position,3,green);
+            if(cv.hasNext)control(1080,432,Canvas::Button::r1,"NEXT PAGE",green);
             unsigned page=cv.selected/7*7;
             for(unsigned i=page;i<cv.count&&i<page+7;++i){char line[256];std::snprintf(line,sizeof(line),"%s %.52s / %s",i==cv.selected?">":" ",cv.games[i].title,cv.games[i].store);c.text(100,490+(i-page)*52,line,3,i==cv.selected?green:Color::white);}
-        } else c.text(100,570,"CIRCLE CLOSE | L1+R1 SIGN OUT",4,green);
-
+        }
     }
+    c.rectangle(100,832,1720,2,static_cast<Color>(0xff40372e));
     if(v.state==State::authenticated){
-        char quality[128];std::snprintf(quality,sizeof(quality),"L1 QUALITY: %s",opennow::profileLabel(profile));
-        c.text(100,855,quality,3,green);
+        control(100,850,Canvas::Button::cross,"PLAY",Color::white);
+        control(480,850,Canvas::Button::square,"CATALOG",Color::white);
+        control(860,850,Canvas::Button::triangle,"SEARCH",Color::white);
+        if(cv.hasNext)control(1240,850,Canvas::Button::r1,"NEXT PAGE",Color::white);
+        control(100,915,Canvas::Button::l1,"PROFILE",green);
+        c.text(330,929,opennow::profileLabel(profile),3,green);
+        control(100,980,Canvas::Button::circle,"CLOSE APP",green);
+        signOut(480,980);
+        c.text(1000,994,v.sessionSaved?"ACCOUNT SAVED":"ACCOUNT NOT SAVED",3,green);
+    } else {
+        control(100,870,Canvas::Button::cross,"SIGN IN",Color::white);
+        control(480,870,Canvas::Button::circle,"CLOSE APP",Color::white);
+        c.text(100,994,"UNOFFICIAL CLIENT",3,green);
     }
-    c.text(100,905,v.state==State::authenticated?"CROSS PLAY | SQUARE CATALOG | TRIANGLE SEARCH | R1 NEXT":"CROSS SIGN IN | CIRCLE CLOSE",3,Color::white);
 #ifndef OPENNOW_HOST_PREVIEW
-    c.text(100,955,opennow::gpu::outputLabel(),3,green);
+    c.text(1240,929,opennow::gpu::outputLabel(),3,green);
 #else
-    c.text(100,955,"SDR / STEREO",3,green);
+    c.text(1240,929,"SDR / STEREO",3,green);
 #endif
-    c.text(100,995,v.state==State::authenticated ?
-        (v.sessionSaved ? "ACCOUNT SAVED | CIRCLE CLOSE | L1+R1 SIGN OUT" :
-            "ACCOUNT NOT SAVED | CIRCLE CLOSE | L1+R1 SIGN OUT") :
-        "UNOFFICIAL CLIENT - CLOSE WITH THE PS MENU",3,green);
     if(searchInput.open) {
-        c.rectangle(80,300,1760,650,bg);
+        c.rectangle(80,300,1760,665,bg);
         c.text(100,320,"SEARCH CATALOG",5,green);
         const std::string_view searchText(*searchInput.text?searchInput.text:"ENTER A GAME TITLE");
         c.text(100,385,searchText.substr(0,65),3,Color::white);
         if(searchText.size()>65)c.text(100,425,searchText.substr(65),3,Color::white);
-        for(unsigned i=0;i<40;++i) {
+        for(unsigned i=0;i<sizeof(opennow::CatalogSearch::keys)-1;++i) {
             char key[2]{opennow::CatalogSearch::keys[i],0};
-            if(key[0]==' ')key[0]='_';
-            const unsigned x=120+(i%10)*145,y=475+(i/10)*75;
-            if(i==searchInput.selected)c.rectangle(x-10,y-10,55,50,green);
-            c.text(x,y,key,4,i==searchInput.selected?bg:Color::white);
+            const unsigned x=120+(i%10)*145,y=475+(i/10)*60;
+            if(i==searchInput.selected)c.rectangle(x-10,y-10,key[0]==' '?140:55,50,green);
+            c.text(x,y,key[0]==' '?"SPACE":key,4,i==searchInput.selected?bg:Color::white);
         }
-        c.text(100,800,"D-PAD MOVE | CROSS TYPE | SQUARE BACKSPACE | TRIANGLE CLEAR",3,Color::white);
-        c.text(100,860,"OPTIONS SEARCH | CIRCLE CANCEL | _ = SPACE",3,green);
+        c.rectangle(100,780,1720,2,static_cast<Color>(0xff40372e));
+        control(100,800,Canvas::Button::dpad,"MOVE",Color::white);
+        control(480,800,Canvas::Button::cross,"TYPE",Color::white);
+        control(860,800,Canvas::Button::square,"BACKSPACE",Color::white);
+        control(1240,800,Canvas::Button::triangle,"CLEAR",Color::white);
+        control(100,875,Canvas::Button::options,"SEARCH",green);
+        control(480,875,Canvas::Button::circle,"CANCEL",green);
     }
     return true;
 }
