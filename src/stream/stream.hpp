@@ -40,10 +40,15 @@ private:
  static void dataMessage(char*,std::size_t,void*,std::uint16_t);
  static void dataOpen(void*);static void dataClose(void*);
  Media& media_;PeerConnection* pc_=nullptr;WebSocketClient* ws_=nullptr;
- StreamSettings settings_{};Session session_{};char status_[192]{};std::string name_;int peerId_=0,remoteId_=0,ack_=0,protocol_=2;
+ StreamSettings settings_{};Session session_{};char status_[192]{};std::string name_;int peerId_=0,remoteId_=1,ack_=0,protocol_=2;
  bool failed_=false,runtimeReady_=false,answerSent_=false,inputReady_=false;std::vector<std::string> candidates_;
  std::string candidateMid_;int candidateMLine_=0;
  std::uint64_t nextHeartbeat_=0,started_=0,lastInput_=0;unsigned inputAttempts_=0;
+ struct GamepadObservation {
+  std::uint16_t buttons=0,triggers=0;
+  std::uint8_t neutral=0;
+  bool connected=false,seen=false;
+ } previousInput_;
  unsigned lastVideoLoss_=0;
  std::uint64_t inputOpened_=0,keyframeRequested_=0;
  webrtc::QosFeedback qos_;

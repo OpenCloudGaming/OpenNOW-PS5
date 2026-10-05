@@ -45,14 +45,14 @@ opennow::Session session() {
     return value;
 }
 
-void queuePayload(const char* key, const char* value) {
+void queuePayload(const char* key, const char* value, const char* from="1") {
     auto* payload = cJSON_CreateObject();
     if (std::strcmp(key, "sdp") == 0) cJSON_AddStringToObject(payload, "type", "offer");
     cJSON_AddStringToObject(payload, key, value);
     auto* json = cJSON_PrintUnformatted(payload);
     auto* root = cJSON_CreateObject();
     auto* msg = cJSON_AddObjectToObject(root, "peer_msg");
-    cJSON_AddNumberToObject(msg, "from", 1);
+    if(from)cJSON_AddItemToObject(msg,"from",cJSON_Parse(from));
     cJSON_AddStringToObject(msg, "msg", json);
     auto* wire = cJSON_PrintUnformatted(root);
     incoming = wire;
@@ -177,6 +177,43 @@ int main() {
         clean();
     }
     socketStarts=true;
+    for(const char* id:{"","null","1.5","2147483648","\"invalid\""}) {
+        assert(stream.start(launch,"test"));
+        outbound.clear();
+        incoming=R"({"peer_info":{"name":"opennow-test","id":7},"ackid":1})";
+        stream.tick(1000000);
+        assert(std::find(outbound.begin(),outbound.end(),R"({"ack":1})")==outbound.end());
+        outbound.clear();
+        incoming=std::string(R"({"peer_info":{"name":"opennow-test")")+(*id?std::string(",\"id\":")+id:"")+R"(},"ackid":8})";
+        stream.tick(1000002);
+        assert(std::find(outbound.begin(),outbound.end(),R"({"ack":8})")!=outbound.end());
+        outbound.clear();queuePayload("sdp",answer);stream.tick(1000004);
+        bool checked=false;
+        for(const auto& value:outbound) {
+            auto* root=cJSON_Parse(value.c_str());
+            auto* peer=cJSON_GetObjectItemCaseSensitive(root,"peer_msg");
+            if(peer){assert(cJSON_GetObjectItemCaseSensitive(peer,"from")->valueint==7);checked=true;}
+            cJSON_Delete(root);
+        }
+        assert(checked);stream.stop();clean();
+    }
+    for(bool established:{false,true})for(const char* from:{static_cast<const char*>(nullptr),"null","1.5","2147483648","\"invalid\""}) {
+        assert(stream.start(launch,"test"));
+        if(established){incoming=R"({"peer_msg":{"from":9,"msg":"{}"}})";stream.tick(1000000);}
+        outbound.clear();queuePayload("sdp",answer,from);stream.tick(1000002);
+        bool checked=false;
+        for(const auto& value:outbound) {
+            auto* root=cJSON_Parse(value.c_str());auto* peer=cJSON_GetObjectItemCaseSensitive(root,"peer_msg");
+            if(peer){assert(cJSON_GetObjectItemCaseSensitive(peer,"to")->valueint==(established?9:1));checked=true;}
+            cJSON_Delete(root);
+        }
+        assert(checked);stream.stop();clean();
+    }
+    assert(stream.start(launch,"test"));stream.tick(1000000);outbound.clear();
+    incoming=R"({"hb":null,"ackid":3})";stream.tick(1000002);
+    assert(std::find(outbound.begin(),outbound.end(),R"({"ack":3})")!=outbound.end());
+    assert(std::find(outbound.begin(),outbound.end(),R"({"hb":1})")!=outbound.end());
+    stream.stop();clean();
     launch.settings={1440,1080,47,32000,opennow::VideoMode::h264Hardware,opennow::QualityMode::clarity,opennow::NetworkPolicy::fixed};
     const auto expectedSettings=launch.settings;
     assert(stream.start(launch,"test")&&mediaSettings==expectedSettings);
@@ -342,6 +379,50 @@ int main() {
 
     using opennow::wire::Bytes;
     namespace wire = opennow::wire;
+    for(unsigned protocol:{2U,3U}) {
+        assert(stream.start(launch,"test"));
+        char handshake[]={0x0e,0x02,static_cast<char>(protocol),0};
+        dataCallback(handshake,sizeof(handshake),dataContext,0);
+        sent.clear();
+        PS5_PadData state{};state.connected=true;state.leftStick={128,128};state.rightStick={128,128};
+        const unsigned offset=protocol==3?12:0;
+        stream.input(state,100000);assert(sent.size()==1);
+        state.leftStick.x=200;
+        stream.input(state,102000);assert(sent.size()==1);
+        state.leftStick.x=128;
+        stream.input(state,104000);assert(sent.size()==2);
+        assert(sent.back()[offset+16]==0&&sent.back()[offset+17]==0);
+        state.leftStick.x=200;state.rightStick.x=200;
+        stream.input(state,120000);assert(sent.size()==3);
+        state.leftStick.x=128;
+        stream.input(state,120002);assert(sent.size()==4);
+        assert(sent.back()[offset+16]==0&&sent.back()[offset+17]==0&&sent.back()[offset+21]!=0);
+        state.rightStick.x=201;
+        stream.input(state,120004);assert(sent.size()==4);
+        state.rightStick.x=128;
+        stream.input(state,120006);assert(sent.size()==5);
+        state.buttons=PS5_PAD_BUTTON_UP;
+        stream.input(state,120008);assert(sent.size()==6&&sent.back()[offset+12]==1);
+        state.buttons=0;
+        stream.input(state,120010);assert(sent.size()==7&&sent.back()[offset+12]==0);
+        state.analogButtons.l2=128;
+        stream.input(state,120012);assert(sent.size()==8&&sent.back()[offset+14]==128);
+        state.analogButtons.l2=0;
+        stream.input(state,120014);assert(sent.size()==9&&sent.back()[offset+14]==0);
+        state.connected=false;
+        stream.input(state,120016);assert(sent.size()==10);
+        state.connected=true;
+        stream.input(state,120018);assert(sent.size()==11);
+        stream.input(state,120020);assert(sent.size()==11);
+        stream.input(state,136018);assert(sent.size()==12);
+        state.leftStick.x=140;
+        stream.input(state,152018);assert(sent.size()==13);
+        state.leftStick.x=139;
+        stream.input(state,152020);assert(sent.size()==14&&sent.back()[offset+16]==0&&sent.back()[offset+17]==0);
+        state.leftStick.x=128;
+        stream.input(state,152022);assert(sent.size()==14);
+        stream.stop();clean();sent.clear();
+    }
     opennow::InputQueue queue;
     assert(stream.start(launch, "test"));
     queue.key({0x41, 0x1e, 0});

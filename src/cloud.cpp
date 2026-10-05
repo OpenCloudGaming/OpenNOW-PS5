@@ -241,7 +241,7 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
     for(auto* key:{"internalTitle","parentSessionId","clientDisplayHdrCapabilities"})cJSON_AddNullToObject(req,key);
     if(*netId)cJSON_AddStringToObject(req,"networkTestSessionId",netId);else cJSON_AddNullToObject(req,"networkTestSessionId");
     cJSON_AddStringToObject(req,"clientIdentification","GFN-PC");cJSON_AddStringToObject(req,"deviceHashId",device);cJSON_AddStringToObject(req,"clientVersion","30.0");cJSON_AddStringToObject(req,"clientPlatformName","windows");cJSON_AddStringToObject(req,"sdkVersion","1.0");cJSON_AddStringToObject(req,"partnerCustomData","");
-    cJSON_AddArrayToObject(req,"availableSupportedControllers");
+    cJSON_AddItemToArray(cJSON_AddArrayToObject(req,"availableSupportedControllers"),cJSON_CreateNumber(2));
     for(auto* key:{"useOps","accountLinked"})cJSON_AddBoolToObject(req,key,true);
     for(auto* key:{"secureRTSPSupported","enablePersistingInGameSettings"})cJSON_AddBoolToObject(req,key,false);
     cJSON_AddNumberToObject(req,"streamerVersion",1);cJSON_AddNumberToObject(req,"audioMode",2);cJSON_AddNumberToObject(req,"sdrHdrMode",settings.hdr()?1:0);cJSON_AddNumberToObject(req,"surroundAudioInfo",0);cJSON_AddNumberToObject(req,"remoteControllersBitmap",1);cJSON_AddNumberToObject(req,"enhancedStreamMode",1);cJSON_AddNumberToObject(req,"appLaunchMode",2);cJSON_AddNumberToObject(req,"clientTimezoneOffset",0);

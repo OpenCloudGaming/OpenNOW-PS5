@@ -153,6 +153,7 @@ See [contributing](CONTRIBUTING.md) for the development workflow, [native hardwa
 | [Stream quality](docs/STREAM_QUALITY.md) | Profiles, measurements, and validation limits |
 | [Port status](docs/PORT_STATUS.md) | Implementation history and console results |
 | [Development builds](docs/DEVELOPMENT_BUILDS.md) | Behavior changes since the original alpha |
+| [Android upstream sync](docs/UPSTREAM_SYNC.md) | Reviewed fixes, ported behavior, and platform-specific exclusions |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Build, loader, and deployment checks |
 | [Third-party notices](THIRD_PARTY_NOTICES.md) | Component licenses and source provenance |
 

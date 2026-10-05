@@ -29,7 +29,7 @@ void mediaSdp(const char* stage,const std::string& s){
 }
 const cJSON* get(const cJSON* j,const char* k){return cJSON_GetObjectItemCaseSensitive(j,k);}
 const char* text(const cJSON* j,const char* k){auto* p=get(j,k);return cJSON_IsString(p)?p->valuestring:"";}
-int number(const cJSON* j,const char* k){auto* p=get(j,k);return cJSON_IsNumber(p)?p->valueint:0;}
+bool integer(const cJSON* value){return cJSON_IsNumber(value)&&value->valuedouble==value->valueint;}
 void le(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes--){b.push_back(n&255);n>>=8;}}
 void be(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes)b.push_back((n>>(--bytes*8))&255);}
 struct ModifierKey{std::uint8_t bit;std::uint16_t vk,scan;};
@@ -38,7 +38,7 @@ constexpr ModifierKey modifierKeys[]={{modifierShift,0xa0,0x2a},{modifierCtrl,0x
 bool Stream::start(const Session& s,const char* device) {
  if(validateSettings(s.settings)!=SettingsError::none){stop();fail("Invalid stream settings");return false;}
  qos_={};nextQos_=0;qosRequested_=false;
- stop();opennow_media_note("START " OPENNOW_VERSION);entropyFailed=false;session_=s;settings_=s.settings;name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;keyHeld_=false;mouseHeld_=0;keyUpAt_=nextKeyAt_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
+ stop();opennow_media_note("START " OPENNOW_VERSION);entropyFailed=false;session_=s;settings_=s.settings;name_=std::string("opennow-")+device;peerId_=ack_=0;remoteId_=1;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;keyHeld_=false;mouseHeld_=0;keyUpAt_=nextKeyAt_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
  capture_.arm(OPENNOW_STORAGE_ROOT,settings_.codec()==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){fail("Invalid secure signaling endpoint");release();return false;}
  if(!media_.start(settings_)){fail("Could not initialize video decoder / audio output");release();return false;}
@@ -75,7 +75,7 @@ void Stream::release() {
   mouseHeld_=0;PS5_PadData neutral{};input(neutral,at);peer_connection_close(pc_);peer_connection_destroy(pc_);pc_=nullptr;}
  if(ws_){ws_->disconnect();delete ws_;ws_=nullptr;}
  if(runtimeReady_){peer_deinit();runtimeReady_=false;}
- media_.stop();secureErase(&session_,sizeof(session_));session_={};inputReady_=false;answerSent_=false;candidates_.clear();candidateMid_.clear();candidateMLine_=0;
+ media_.stop();secureErase(&session_,sizeof(session_));session_={};inputReady_=false;answerSent_=false;candidates_.clear();candidateMid_.clear();candidateMLine_=0;previousInput_={};
 }
 void Stream::send(cJSON* root){char* value=cJSON_PrintUnformatted(root);if(value&&ws_)ws_->send_message(value);cJSON_free(value);}
 void Stream::payload(cJSON* value){if(!ws_)return;char* data=cJSON_PrintUnformatted(value);if(!data)return;auto* root=cJSON_CreateObject();auto* msg=cJSON_AddObjectToObject(root,"peer_msg");cJSON_AddNumberToObject(msg,"from",peerId_);cJSON_AddNumberToObject(msg,"to",remoteId_);cJSON_AddStringToObject(msg,"msg",data);cJSON_AddNumberToObject(root,"ackid",++ack_);send(root);cJSON_Delete(root);cJSON_free(data);}
@@ -87,11 +87,13 @@ void Stream::sendCandidates(){
 void Stream::peerInfo(){auto* root=cJSON_CreateObject();cJSON_AddNumberToObject(root,"ackid",++ack_);auto* info=cJSON_AddObjectToObject(root,"peer_info");cJSON_AddStringToObject(info,"browser","Chrome");cJSON_AddStringToObject(info,"browserVersion","131");cJSON_AddBoolToObject(info,"connected",true);cJSON_AddNumberToObject(info,"id",peerId_);cJSON_AddStringToObject(info,"name",name_.c_str());cJSON_AddNumberToObject(info,"peerRole",0);const auto resolution=std::to_string(settings_.width)+"x"+std::to_string(settings_.height);cJSON_AddStringToObject(info,"resolution",resolution.c_str());cJSON_AddNumberToObject(info,"version",2);send(root);cJSON_Delete(root);}
 void Stream::message(const std::string& message) {
  if(failed_||message.size()>65536)return;auto* root=cJSON_ParseWithLength(message.c_str(),message.size());if(!root)return;
- auto* info=get(root,"peer_info");if(!std::strcmp(text(info,"name"),name_.c_str()))peerId_=number(info,"id");
- if(cJSON_IsNumber(get(root,"ackid"))&&(!info||number(info,"id")!=peerId_)){auto* a=cJSON_CreateObject();cJSON_AddNumberToObject(a,"ack",number(root,"ackid"));send(a);cJSON_Delete(a);}
+ auto* info=get(root,"peer_info");auto* id=get(info,"id");
+ if(integer(id)&&!std::strcmp(text(info,"name"),name_.c_str()))peerId_=id->valueint;
+ auto* ack=get(root,"ackid");
+ if(integer(ack)&&(!integer(id)||id->valueint!=peerId_)){auto* a=cJSON_CreateObject();cJSON_AddNumberToObject(a,"ack",ack->valueint);send(a);cJSON_Delete(a);}
  if(get(root,"hb")){auto* a=cJSON_CreateObject();cJSON_AddNumberToObject(a,"hb",1);send(a);cJSON_Delete(a);}
  if(!std::strcmp(text(root,"error"),"peerRemoved"))fail("Signaling: peerRemoved");
- auto* msg=get(root,"peer_msg");if(msg){remoteId_=number(msg,"from");if(!std::strcmp(text(msg,"msg"),"BYE"))fail("Signaling: server ended the stream");auto* data=cJSON_Parse(text(msg,"msg"));if(data){
+ auto* msg=get(root,"peer_msg");if(msg){auto* from=get(msg,"from");if(integer(from))remoteId_=from->valueint;if(!std::strcmp(text(msg,"msg"),"BYE"))fail("Signaling: server ended the stream");auto* data=cJSON_Parse(text(msg,"msg"));if(data){
   if(!std::strcmp(text(data,"type"),"offer")){
    std::string offer=sdp::PrepareGfnOfferSdp(text(data,"sdp"),session_.signaling,session_.mediaIp,session_.mediaPort);
    if(offer.size()<60000&&!offer.empty()){
@@ -121,7 +123,7 @@ void Stream::video(const PeerVideoPacket* p,void* ctx){auto& self=*static_cast<S
 void Stream::audio(const PeerAudioPacket* p,void* ctx){if(p)static_cast<Stream*>(ctx)->media_.audio(p->data,p->size,p->sequence,p->payload_type,p->timestamp);}
 void Stream::dataMessage(char* data,std::size_t size,void* ctx,std::uint16_t sid){static_cast<Stream*>(ctx)->data(data,size,sid);}
 void Stream::dataOpen(void* ctx){auto& self=*static_cast<Stream*>(ctx);if(peer_connection_create_datachannel_sid(self.pc_,DATA_CHANNEL_RELIABLE,0,0,const_cast<char*>("input_channel_v1"),const_cast<char*>(""),0)>=0&&!self.inputOpened_)self.inputOpened_=sceKernelGetProcessTime();}
-void Stream::dataClose(void* ctx){auto& self=*static_cast<Stream*>(ctx);self.inputReady_=false;self.inputOpened_=0;}
+void Stream::dataClose(void* ctx){auto& self=*static_cast<Stream*>(ctx);self.inputReady_=false;self.inputOpened_=0;self.previousInput_={};}
 void Stream::data(const char* data,std::size_t size,std::uint16_t sid){if(sid||size<2||size>64)return;auto* b=reinterpret_cast<const unsigned char*>(data);int word=b[0]|(b[1]<<8);if(word!=526&&b[0]!=14)return;protocol_=word==526?(size>=4?(b[2]|(b[3]<<8)):2):word;protocol_=std::max(2,protocol_);if(peer_connection_datachannel_send_binary_sid(pc_,const_cast<char*>(data),size,0)>=0)inputReady_=true;}
 void Stream::tick(std::uint64_t now){if(!active())return;if(entropyFailed)fail("Secure entropy failed");if(failed_){release();return;}if(!started_)started_=now;ws_->poll();
  if(!ws_->is_connected())fail(("Signaling: "+ws_->get_last_error()).c_str());
@@ -182,10 +184,19 @@ if(!answerSent_)peerInfo();
  if(!media_.frames&&now-started_>45000000){const auto last=std::string("Video timeout: ")+status_;fail(last.c_str());}
  if(failed_)release();
 }
-void Stream::input(const PS5_PadData& pad,std::uint64_t now){if(!inputReady_||!pc_||now-lastInput_<16000)return;lastInput_=now;
+void Stream::input(const PS5_PadData& pad,std::uint64_t now){if(!inputReady_||!pc_)return;
  std::uint16_t buttons=0;const unsigned ps[]={PS5_PAD_BUTTON_UP,PS5_PAD_BUTTON_DOWN,PS5_PAD_BUTTON_LEFT,PS5_PAD_BUTTON_RIGHT,PS5_PAD_BUTTON_OPTIONS,PS5_PAD_BUTTON_TOUCH_PAD,PS5_PAD_BUTTON_L3,PS5_PAD_BUTTON_R3,PS5_PAD_BUTTON_L1,PS5_PAD_BUTTON_R1,PS5_PAD_BUTTON_CROSS,PS5_PAD_BUTTON_CIRCLE,PS5_PAD_BUTTON_SQUARE,PS5_PAD_BUTTON_TRIANGLE};const unsigned xb[]={1,2,4,8,16,32,64,128,256,512,4096,8192,16384,32768};for(unsigned i=0;i<14;++i)if(pad.connected&&(pad.buttons&ps[i]))buttons|=xb[i];
  auto axis=[&](unsigned v,bool flip){if(!pad.connected)return 0;int n=(static_cast<int>(v)-128)*256;if(n>-3000&&n<3000)n=0;return flip?-std::max(-32767,n):n;};
- std::vector<std::uint8_t> data;le(data,12,4);le(data,26,2);le(data,0,2);le(data,1,2);le(data,20,2);le(data,buttons,2);le(data,pad.connected?(pad.analogButtons.l2|(pad.analogButtons.r2<<8)):0,2);le(data,axis(pad.leftStick.x,false),2);le(data,axis(pad.leftStick.y,true),2);le(data,axis(pad.rightStick.x,false),2);le(data,axis(pad.rightStick.y,true),2);le(data,0,2);le(data,85,2);le(data,0,2);le(data,now,8);
+ const int lx=axis(pad.leftStick.x,false),ly=axis(pad.leftStick.y,true),rx=axis(pad.rightStick.x,false),ry=axis(pad.rightStick.y,true);
+ const auto triggers=static_cast<std::uint16_t>(pad.connected?(pad.analogButtons.l2|(pad.analogButtons.r2<<8)):0);
+ const auto neutral=static_cast<std::uint8_t>((lx==0&&ly==0?1:0)|(rx==0&&ry==0?2:0));
+ const bool connected=pad.connected!=0;
+ const bool immediate=!previousInput_.seen||buttons!=previousInput_.buttons||triggers!=previousInput_.triggers||
+  connected!=previousInput_.connected||(neutral&~previousInput_.neutral)!=0;
+ previousInput_={buttons,triggers,neutral,connected,true};
+ if(!immediate&&now-lastInput_<16000)return;
+ lastInput_=now;
+ std::vector<std::uint8_t> data;le(data,12,4);le(data,26,2);le(data,0,2);le(data,1,2);le(data,20,2);le(data,buttons,2);le(data,triggers,2);le(data,lx,2);le(data,ly,2);le(data,rx,2);le(data,ry,2);le(data,0,2);le(data,85,2);le(data,0,2);le(data,now,8);
  if(protocol_>2){std::vector<std::uint8_t> wire{0x23};be(wire,now,8);wire.push_back(0x21);be(wire,data.size(),2);wire.insert(wire.end(),data.begin(),data.end());data=std::move(wire);}
  peer_connection_datachannel_send_binary_sid(pc_,reinterpret_cast<char*>(data.data()),data.size(),0);
 }

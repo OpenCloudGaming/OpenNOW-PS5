@@ -32,6 +32,14 @@ int main(){
   assert(fresh.posts==1&&client.view().state==CloudState::queued);
   assert(client.view().queuePosition==5&&client.view().setupStep==-1);
   assert(fresh.body.find("\"userAge\":25")!=std::string::npos);
+  auto* launchBody=cJSON_Parse(fresh.body.c_str());assert(launchBody);
+  auto* launchData=cJSON_GetObjectItemCaseSensitive(launchBody,"sessionRequestData");
+  auto* controllers=cJSON_GetObjectItemCaseSensitive(launchData,"availableSupportedControllers");
+  assert(cJSON_IsArray(controllers)&&cJSON_GetArraySize(controllers)==1);
+  assert(cJSON_GetArrayItem(controllers,0)->valueint==2);
+  assert(cJSON_GetObjectItemCaseSensitive(launchData,"remoteControllersBitmap")->valueint==1);
+  assert(cJSON_GetObjectItemCaseSensitive(launchData,"appLaunchMode")->valueint==2);
+  cJSON_Delete(launchBody);
   assert(client.stop("fixture-jwt","fixture-device"));
  }
  assert(trustedCloudUrl("https://games.geforce.com/graphql"));
@@ -146,6 +154,10 @@ int main(){
   const auto settings=settingsFor(profile);
   auto* root=cJSON_Parse(m.body.c_str());assert(root);
   auto* request=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
+  auto* controllers=cJSON_GetObjectItemCaseSensitive(request,"availableSupportedControllers");
+  assert(cJSON_IsArray(controllers)&&cJSON_GetArraySize(controllers)==1&&cJSON_GetArrayItem(controllers,0)->valueint==2);
+  assert(cJSON_GetObjectItemCaseSensitive(request,"remoteControllersBitmap")->valueint==1);
+  assert(cJSON_GetObjectItemCaseSensitive(request,"appLaunchMode")->valueint==2);
   auto* features=cJSON_GetObjectItemCaseSensitive(request,"requestedStreamingFeatures");
   auto* monitor=cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(request,"clientRequestMonitorSettings"),0);
   assert(cJSON_GetObjectItemCaseSensitive(features,"maxBitrateKbps")->valueint==settings.bitrate_kbps);
@@ -181,6 +193,10 @@ int main(){
   assert(custom==StreamSettings{}&&client.session().settings==expected);
   auto* root=cJSON_Parse(snapshot.body.c_str());assert(root);
   auto* req=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
+  auto* controllers=cJSON_GetObjectItemCaseSensitive(req,"availableSupportedControllers");
+  assert(cJSON_IsArray(controllers)&&cJSON_GetArraySize(controllers)==1&&cJSON_GetArrayItem(controllers,0)->valueint==2);
+  assert(cJSON_GetObjectItemCaseSensitive(req,"remoteControllersBitmap")->valueint==1);
+  assert(cJSON_GetObjectItemCaseSensitive(req,"appLaunchMode")->valueint==2);
   auto* features=cJSON_GetObjectItemCaseSensitive(req,"requestedStreamingFeatures");
   auto* monitor=cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(req,"clientRequestMonitorSettings"),0);
   assert(cJSON_GetObjectItemCaseSensitive(features,"bitDepth")->valueint==1);
