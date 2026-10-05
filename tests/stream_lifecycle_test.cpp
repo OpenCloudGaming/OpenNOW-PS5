@@ -22,6 +22,11 @@ std::string remoteSdp;
 std::vector<std::string> outbound;
 std::vector<std::string> diagnostics;
 std::string connectedUrl;
+std::vector<opennow::wire::Bytes> sent;
+void (*dataCallback)(char*, size_t, void*, uint16_t) = nullptr;
+void (*dataOpened)(void*) = nullptr;
+void (*dataClosed)(void*) = nullptr;
+void* dataContext = nullptr;
 void (*localIce)(char*, void*) = nullptr;
 void* localIceContext = nullptr;
 WebSocketClient* websocket = nullptr;
@@ -118,7 +123,7 @@ void peer_connection_destroy(PeerConnection* pc) { assert(!inPoll && !inLoop); -
 int peer_connection_get_video_rtp_stats(PeerConnection*, PeerVideoRtpStats* stats) { *stats = {}; stats->assembler_ready = assemblerReady; return 0; }
 void peer_connection_onicecandidate(PeerConnection* pc, void (*callback)(char*, void*)) { localIce = callback; localIceContext = pc->config.user_data; }
 void peer_connection_oniceconnectionstatechange(PeerConnection* pc, void (*fn)(PeerConnectionState, void*)) { pc->onState = fn; }
-void peer_connection_ondatachannel(PeerConnection*, void (*)(char*, size_t, void*, uint16_t), void (*)(void*), void (*)(void*)) {}
+void peer_connection_ondatachannel(PeerConnection* pc, void (*message)(char*, size_t, void*, uint16_t), void (*open)(void*), void (*close)(void*)) { dataCallback = message; dataOpened = open; dataClosed = close; dataContext = pc->config.user_data; }
 void peer_connection_set_remote_description(PeerConnection*, const char* sdp, SdpType) { remoteSdp = sdp; }
 const char* peer_connection_create_answer(PeerConnection*) {
     if (nullAnswer) return nullptr;
@@ -146,7 +151,7 @@ int peer_connection_loop(PeerConnection* pc) {
 int peer_connection_request_video_keyframe(PeerConnection*) { return 0; }
 int peer_connection_create_datachannel_sid(PeerConnection*, DecpChannelType, uint16_t, uint32_t, char*, char*, uint16_t) { return 0; }
 int peer_connection_datachannel_is_open(PeerConnection*, uint16_t) { return 0; }
-int peer_connection_datachannel_send_binary_sid(PeerConnection*, char*, size_t, uint16_t) { return 0; }
+int peer_connection_datachannel_send_binary_sid(PeerConnection*, char* data, size_t size, uint16_t sid) { if (!sid) sent.emplace_back(data, data + size); return 0; }
 }
 
 int main() {
@@ -326,4 +331,179 @@ int main() {
     assert(candidates.front() == "a=candidate:100 1 UDP 2130706431 198.51.100.55 443 typ host");
     stream.stop();
     clean();
+
+    using opennow::wire::Bytes;
+    namespace wire = opennow::wire;
+    opennow::InputQueue queue;
+    assert(stream.start(launch, "test"));
+    queue.key({0x41, 0x1e, 0});
+    queue.move(500, 0);
+    stream.events(queue, 4000000);
+    assert(sent.empty() && queue.size() == 0);
+    char v3[] = {0x0e, 0x02, 0x03, 0x00};
+    dataCallback(v3, sizeof(v3), dataContext, 0);
+    sent.clear();
+    PS5_PadData pad{};
+    pad.connected = true;
+    pad.buttons = PS5_PAD_BUTTON_CROSS | PS5_PAD_BUTTON_TOUCH_PAD;
+    pad.leftStick = {128, 128};
+    pad.rightStick = {128, 128};
+    stream.input(pad, 5000000);
+    assert(sent.size() == 1);
+    assert((sent[0] == Bytes{0x23, 0, 0, 0, 0, 0, 0x4c, 0x4b, 0x40, 0x21, 0x00, 0x26,
+        0x0c, 0, 0, 0, 0x1a, 0, 0, 0, 0x01, 0, 0x14, 0, 0x20, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x55, 0, 0, 0,
+        0x40, 0x4b, 0x4c, 0, 0, 0, 0, 0}));
+    sent.clear();
+    pad.buttons = PS5_PAD_BUTTON_TOUCH_PAD;
+    stream.input(pad, 5016000);
+    assert(sent.size() == 1 && sent[0].size() == 50 && sent[0][24] == 0x20 && sent[0][25] == 0);
+    sent.clear();
+    pad.buttons = 0;
+    stream.input(pad, 5032000);
+    assert(sent.size() == 1 && sent[0][24] == 0 && sent[0][25] == 0);
+
+    sent.clear();
+    queue.key({0x41, 0x1e, opennow::modifierShift});
+    queue.move(70000, 0);
+    stream.events(queue, 6000000);
+    assert(sent.size() == 5);
+    assert(sent[0] == wire::key(true, 0xa0, 0x2a, 1, 3, 6000000));
+    assert(sent[1] == wire::key(true, 0x41, 0x1e, 1, 3, 6000000));
+    assert(sent[2] == wire::mouseMove(32767, 0, 3, 6000000) && sent[3] == sent[2]);
+    assert(sent[4] == wire::mouseMove(1, 0, 3, 6000000));
+    sent.clear();
+    queue.key({0x42, 0x30, opennow::modifierCtrl | opennow::modifierAlt});
+    stream.events(queue, 6031999);
+    assert(sent.empty() && queue.size() == 1);
+    stream.events(queue, 6032000);
+    assert(sent.size() == 2);
+    assert(sent[0] == wire::key(false, 0x41, 0x1e, 1, 3, 6032000));
+    assert(sent[1] == wire::key(false, 0xa0, 0x2a, 0, 3, 6032000));
+    sent.clear();
+    stream.events(queue, 6063999);
+    assert(sent.empty());
+    stream.events(queue, 6064000);
+    assert(sent.size() == 3);
+    assert(sent[0] == wire::key(true, 0x11, 0x1d, 2, 3, 6064000));
+    assert(sent[1] == wire::key(true, 0x12, 0x38, 6, 3, 6064000));
+    assert(sent[2] == wire::key(true, 0x42, 0x30, 6, 3, 6064000));
+    sent.clear();
+    assert(queue.button(3, true) && queue.button(3, true));
+    stream.events(queue, 6070000);
+    assert(sent.size() == 1 && sent[0] == wire::mouseButton(true, 3, 3, 6070000));
+    sent.clear();
+    stream.stop();
+    assert(sent.size() == 5);
+    assert(sent[0] == wire::key(false, 0x42, 0x30, 6, 3, 5052000));
+    assert(sent[1] == wire::key(false, 0x12, 0x38, 2, 3, 5052000));
+    assert(sent[2] == wire::key(false, 0x11, 0x1d, 0, 3, 5052000));
+    assert(sent[3] == wire::mouseButton(false, 3, 3, 5052000));
+    assert(sent[4].size() == 50 && sent[4][9] == 0x21 && sent[4][24] == 0 && sent[4][25] == 0);
+    clean();
+
+    assert(stream.start(launch, "test"));
+    char v2[] = {0x0e, 0x02, 0x02, 0x00};
+    dataCallback(v2, sizeof(v2), dataContext, 0);
+    sent.clear();
+    queue.clear();
+    assert(queue.button(1, true));
+    queue.key({0x0d, 0x1c, 0});
+    stream.events(queue, 7000000);
+    assert(sent.size() == 2);
+    assert(sent[0] == wire::mouseButton(true, 1, 2, 7000000));
+    assert(sent[1] == wire::key(true, 0x0d, 0x1c, 0, 2, 7000000));
+    sent.clear();
+    stream.stop();
+    assert(sent.size() == 3);
+    assert(sent[0] == wire::key(false, 0x0d, 0x1c, 0, 2, 20000));
+    assert(sent[1] == wire::mouseButton(false, 1, 2, 20000));
+    assert(sent[2].size() == 38 && sent[2][0] == 0x0c && sent[2][12] == 0 && sent[2][13] == 0);
+    clean();
+
+    assert(stream.start(launch, "test"));
+    queue.clear();
+    queue.key({0x51, 0x10, 0});
+    queue.cancel();
+    stream.events(queue, 8000000);
+    assert(!stream.inputReady() && queue.size() == 0);
+    dataCallback(v3, sizeof(v3), dataContext, 0);
+    assert(stream.inputReady());
+    sent.clear();
+    stream.events(queue, 8000001);
+    stream.events(queue, 9000000);
+    assert(sent.empty());
+    assert(queue.button(200, true) && queue.button(0, true) && queue.button(1, true));
+    stream.events(queue, 9000000);
+    assert(sent.size() == 1 && sent[0] == wire::mouseButton(true, 1, 3, 9000000));
+    sent.clear();
+    queue.key({0x41, 0x1e, opennow::modifierShift});
+    stream.events(queue, 9100000);
+    assert(sent.size() == 2);
+    sent.clear();
+    queue.key({0x42, 0x30, 0});
+    queue.move(10, 0);
+    queue.cancel();
+    queue.key({0x43, 0x2e, 0});
+    stream.events(queue, 9110000);
+    assert(sent.size() == 3);
+    assert(sent[0] == wire::key(false, 0x41, 0x1e, 1, 3, 9110000));
+    assert(sent[1] == wire::key(false, 0xa0, 0x2a, 0, 3, 9110000));
+    assert(sent[2] == wire::mouseButton(false, 1, 3, 9110000));
+    sent.clear();
+    stream.events(queue, 9141999);
+    assert(sent.empty() && queue.size() == 1);
+    stream.events(queue, 9142000);
+    assert(sent.size() == 1 && sent[0] == wire::key(true, 0x43, 0x2e, 0, 3, 9142000));
+    sent.clear();
+    queue.key({0x44, 0x20, 0});
+    queue.cancel();
+    stream.events(queue, 9150000);
+    assert(sent.size() == 1 && sent[0] == wire::key(false, 0x43, 0x2e, 0, 3, 9150000));
+    sent.clear();
+    for (std::uint64_t at = 9150000; at < 9400000; at += 16000) stream.events(queue, at);
+    assert(sent.empty() && queue.size() == 0);
+    queue.cancel();
+    stream.events(queue, 9400000);
+    assert(sent.empty());
+    stream.stop();
+    clean();
+
+    assert(stream.start(launch, "test"));
+    media.frames = 1;
+    queue.clear();
+    dataOpened(dataContext);
+    dataCallback(v3, sizeof(v3), dataContext, 0);
+    assert(stream.inputReady());
+    assert(queue.button(1, true));
+    queue.key({0x41, 0x1e, opennow::modifierShift});
+    stream.events(queue, 2000000);
+    sent.clear();
+    stream.events(queue, 2010000);
+    assert(sent.size() == 0);
+    dataClosed(dataContext);
+    assert(!stream.inputReady());
+    assert(queue.button(1, false));
+    queue.key({0x42, 0x30, 0});
+    stream.events(queue, 2020000);
+    assert(sent.empty() && queue.size() == 0);
+    stream.tick(3000000);
+    assert(!stream.inputReady());
+    stream.events(queue, 3000001);
+    assert(sent.empty());
+    dataOpened(dataContext);
+    stream.tick(4000000);
+    assert(stream.inputReady());
+    sent.clear();
+    queue.move(5, 0);
+    stream.events(queue, 4000001);
+    assert(sent.size() == 4);
+    assert(sent[0] == wire::key(false, 0x41, 0x1e, 1, 2, 4000001));
+    assert(sent[1] == wire::key(false, 0xa0, 0x2a, 0, 2, 4000001));
+    assert(sent[2] == wire::mouseButton(false, 1, 2, 4000001));
+    assert(sent[3] == wire::mouseMove(5, 0, 2, 4000001));
+    sent.clear();
+    stream.stop();
+    assert(sent.size() == 1 && sent[0].size() == 38);
+    clean();
+    media.frames = 0;
 }

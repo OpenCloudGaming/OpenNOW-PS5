@@ -56,6 +56,11 @@ class Canvas final
               unsigned alpha = 255) noexcept;
     void disc(float cx, float cy, float radius, Color color, unsigned alpha = 255) noexcept;
     void polygon(const float *points, unsigned count, Color color, unsigned alpha = 255) noexcept;
+    void imageRounded(int x, int y, unsigned width, unsigned height, const std::uint32_t *data,
+                      float radius, unsigned alpha = 255) noexcept;
+    void imageFaded(int x, int y, unsigned width, unsigned height, const std::uint32_t *data,
+                    unsigned sourceWidth, unsigned sourceHeight, const std::uint8_t *columnAlpha,
+                    const std::uint8_t *rowAlpha) noexcept;
 
   private:
     explicit Canvas(std::uint32_t *pixels) noexcept : pixels_{pixels}

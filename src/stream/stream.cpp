@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // NVIDIA signaling and controller wire formats adapted from OpenNOW-Switch (MIT).
 #include "stream.hpp"
+#include "../version.hpp"
 extern "C" {
 #include "peer.h"
 }
@@ -10,6 +11,7 @@ extern "C" {
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <iterator>
 extern "C" unsigned long long sceKernelGetProcessTime();
 extern "C" void opennow_media_note(const char*);
 static std::atomic_bool entropyFailed{false};
@@ -30,10 +32,12 @@ const char* text(const cJSON* j,const char* k){auto* p=get(j,k);return cJSON_IsS
 int number(const cJSON* j,const char* k){auto* p=get(j,k);return cJSON_IsNumber(p)?p->valueint:0;}
 void le(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes--){b.push_back(n&255);n>>=8;}}
 void be(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes)b.push_back((n>>(--bytes*8))&255);}
+struct ModifierKey{std::uint8_t bit;std::uint16_t vk,scan;};
+constexpr ModifierKey modifierKeys[]={{modifierShift,0xa0,0x2a},{modifierCtrl,0x11,0x1d},{modifierAlt,0x12,0x38}};
 }
 bool Stream::start(const Session& s,const char* device) {
  qos_={};nextQos_=0;qosRequested_=false;
- stop();opennow_media_note("START 00.002.040");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
+ stop();opennow_media_note("START " OPENNOW_VERSION);entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;keyHeld_=false;mouseHeld_=0;keyUpAt_=nextKeyAt_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
  capture_.arm(OPENNOW_STORAGE_ROOT,settings_.codec==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){fail("Invalid secure signaling endpoint");release();return false;}
  if(!media_.start(settings_)){fail("Could not initialize video decoder / audio output");release();return false;}
@@ -64,7 +68,10 @@ void Stream::fail(const char* reason){if(!failed_){failed_=true;std::snprintf(st
 void Stream::stop(){release();failed_=false;}
 void Stream::release() {
  capture_.close();
- if(pc_){PS5_PadData neutral{};input(neutral,lastInput_+20000);peer_connection_close(pc_);peer_connection_destroy(pc_);pc_=nullptr;}
+ if(pc_){
+  const auto at=lastInput_+20000;
+  if(inputReady_){releaseKey(at);for(std::uint8_t b=1;b<=5;++b)if(mouseHeld_&(1U<<b))sendInput(wire::mouseButton(false,b,protocol_,at));}
+  mouseHeld_=0;PS5_PadData neutral{};input(neutral,at);peer_connection_close(pc_);peer_connection_destroy(pc_);pc_=nullptr;}
  if(ws_){ws_->disconnect();delete ws_;ws_=nullptr;}
  if(runtimeReady_){peer_deinit();runtimeReady_=false;}
  media_.stop();secureErase(&session_,sizeof(session_));inputReady_=false;answerSent_=false;candidates_.clear();candidateMid_.clear();candidateMLine_=0;
@@ -113,7 +120,7 @@ void Stream::video(const PeerVideoPacket* p,void* ctx){auto& self=*static_cast<S
 void Stream::audio(const PeerAudioPacket* p,void* ctx){if(p)static_cast<Stream*>(ctx)->media_.audio(p->data,p->size,p->sequence,p->payload_type,p->timestamp);}
 void Stream::dataMessage(char* data,std::size_t size,void* ctx,std::uint16_t sid){static_cast<Stream*>(ctx)->data(data,size,sid);}
 void Stream::dataOpen(void* ctx){auto& self=*static_cast<Stream*>(ctx);if(peer_connection_create_datachannel_sid(self.pc_,DATA_CHANNEL_RELIABLE,0,0,const_cast<char*>("input_channel_v1"),const_cast<char*>(""),0)>=0&&!self.inputOpened_)self.inputOpened_=sceKernelGetProcessTime();}
-void Stream::dataClose(void* ctx){static_cast<Stream*>(ctx)->inputReady_=false;}
+void Stream::dataClose(void* ctx){auto& self=*static_cast<Stream*>(ctx);self.inputReady_=false;self.inputOpened_=0;}
 void Stream::data(const char* data,std::size_t size,std::uint16_t sid){if(sid||size<2||size>64)return;auto* b=reinterpret_cast<const unsigned char*>(data);int word=b[0]|(b[1]<<8);if(word!=526&&b[0]!=14)return;protocol_=word==526?(size>=4?(b[2]|(b[3]<<8)):2):word;protocol_=std::max(2,protocol_);if(peer_connection_datachannel_send_binary_sid(pc_,const_cast<char*>(data),size,0)>=0)inputReady_=true;}
 void Stream::tick(std::uint64_t now){if(!active())return;if(entropyFailed)fail("Secure entropy failed");if(failed_){release();return;}if(!started_)started_=now;ws_->poll();
  if(!ws_->is_connected())fail(("Signaling: "+ws_->get_last_error()).c_str());
@@ -155,7 +162,7 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
    // Replace a small private snapshot, so late symptoms remain observable after
    // the bounded startup media log has filled. No session/network secrets.
    if(auto* live=std::fopen(OPENNOW_STORAGE_ROOT "/live-video.status","wb")){
-    std::fprintf(live,"version=00.002.040 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
+    std::fprintf(live,"version=" OPENNOW_VERSION " elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
      static_cast<unsigned long long>(now-started_),media_.decodedWidth.load(),media_.decodedHeight.load(),media_.videoBytes.load(),media_.frames.load(),media_.presented.load(),media_.decodeError.load(),media_.actualHdr.load(),stats.access_units_dropped,stats.sequence_gaps,media_.queueDrops.load(),media_.recoveryResets.load(),peer_connection_datachannel_is_open(pc_,6),qos_.queuedCount(),capture_.bytes(),capture_.done());
     std::fprintf(live,"au_received=%u queue_depth=%u queue_peak=%u queue_max_us=%llu decode_calls=%u decode_us=%llu decode_max_us=%llu gpu_calls=%u gpu_us=%llu gpu_max_us=%llu\n",
      stats.access_units_completed,media_.queueDepth.load(),media_.queuePeak.load(),static_cast<unsigned long long>(media_.queueMaxUs.load()),media_.decodeCalls.load(),static_cast<unsigned long long>(media_.decodeUs.load()),static_cast<unsigned long long>(media_.decodeMaxUs.load()),media_.gpuCalls.load(),static_cast<unsigned long long>(media_.gpuUs.load()),static_cast<unsigned long long>(media_.gpuMaxUs.load()));
@@ -180,6 +187,38 @@ void Stream::input(const PS5_PadData& pad,std::uint64_t now){if(!inputReady_||!p
  std::vector<std::uint8_t> data;le(data,12,4);le(data,26,2);le(data,0,2);le(data,1,2);le(data,20,2);le(data,buttons,2);le(data,pad.connected?(pad.analogButtons.l2|(pad.analogButtons.r2<<8)):0,2);le(data,axis(pad.leftStick.x,false),2);le(data,axis(pad.leftStick.y,true),2);le(data,axis(pad.rightStick.x,false),2);le(data,axis(pad.rightStick.y,true),2);le(data,0,2);le(data,85,2);le(data,0,2);le(data,now,8);
  if(protocol_>2){std::vector<std::uint8_t> wire{0x23};be(wire,now,8);wire.push_back(0x21);be(wire,data.size(),2);wire.insert(wire.end(),data.begin(),data.end());data=std::move(wire);}
  peer_connection_datachannel_send_binary_sid(pc_,reinterpret_cast<char*>(data.data()),data.size(),0);
+}
+void Stream::sendInput(const wire::Bytes& bytes){peer_connection_datachannel_send_binary_sid(pc_,reinterpret_cast<char*>(const_cast<std::uint8_t*>(bytes.data())),bytes.size(),0);}
+void Stream::releaseKey(std::uint64_t now){
+ if(!keyHeld_)return;
+ auto modifiers=heldKey_.modifiers;
+ sendInput(wire::key(false,heldKey_.vk,heldKey_.scan,modifiers,protocol_,now));
+ for(auto i=std::size(modifierKeys);i--;)if(const auto& m=modifierKeys[i];modifiers&m.bit){modifiers&=~m.bit;sendInput(wire::key(false,m.vk,m.scan,modifiers,protocol_,now));}
+ keyHeld_=false;
+}
+void Stream::events(InputQueue& queue,std::uint64_t now){
+ if(!inputReady_||!pc_){queue.cancel();return;}
+ if(keyHeld_&&now>=keyUpAt_){releaseKey(now);nextKeyAt_=now+32000;}
+ InputEvent e;
+ while(queue.take(e,!keyHeld_&&now>=nextKeyAt_)){
+  if(e.kind==InputEvent::Kind::cancel){
+   if(keyHeld_){releaseKey(now);nextKeyAt_=now+32000;}
+   for(std::uint8_t b=1;b<=5;++b)if(mouseHeld_&(1U<<b))sendInput(wire::mouseButton(false,b,protocol_,now));
+   mouseHeld_=0;
+  } else if(e.kind==InputEvent::Kind::move){
+   while(e.dx||e.dy){const int x=std::clamp(e.dx,-32768,32767),y=std::clamp(e.dy,-32768,32767);sendInput(wire::mouseMove(static_cast<std::int16_t>(x),static_cast<std::int16_t>(y),protocol_,now));e.dx-=x;e.dy-=y;}
+  } else if(e.kind==InputEvent::Kind::button){
+   if(e.button<1||e.button>5)continue;
+   const unsigned bit=1U<<e.button;
+   if(e.down==((mouseHeld_&bit)!=0))continue;
+   sendInput(wire::mouseButton(e.down,e.button,protocol_,now));mouseHeld_^=bit;
+  } else {
+   heldKey_=e.key;keyHeld_=true;keyUpAt_=now+32000;
+   std::uint8_t modifiers=0;
+   for(const auto& m:modifierKeys)if(e.key.modifiers&m.bit){modifiers|=m.bit;sendInput(wire::key(true,m.vk,m.scan,modifiers,protocol_,now));}
+   sendInput(wire::key(true,e.key.vk,e.key.scan,modifiers,protocol_,now));
+  }
+ }
 }
 }
 extern "C" int mbedtls_hardware_poll(void*,unsigned char* out,std::size_t size,std::size_t* used){*used=0;if(!opennow::randomBytes(out,size)){entropyFailed=true;return -1;}*used=size;return 0;}

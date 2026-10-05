@@ -2,11 +2,13 @@
 #include "tv_ui.hpp"
 #include "font.hpp"
 #include "../vendor/qrcodegen.h"
+#include "../version.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string_view>
+#include <utility>
 
 namespace opennow::ui {
 namespace {
@@ -113,7 +115,7 @@ float optionsPill(Canvas& c, float x, float cy, Color fill=raised, Color color=i
 }
 float touchPill(Canvas& c, float x, float cy) {c.roundRect(x,cy-22,58,44,10,raised);glyph(c,Glyph::touch,x+29,cy,ink);return 58;}
 
-enum class HintKind { glyph, pill, optionsMint, chord, hold };
+enum class HintKind { glyph, pill, optionsMint, chord, hold, combo };
 struct Hint { HintKind kind; Glyph icon; const char* key; const char* text; };
 constexpr float hintLabel=24;
 float hintWidth(const Hint& h) {
@@ -122,8 +124,9 @@ float hintWidth(const Hint& h) {
     case HintKind::glyph: return 44+12+text;
     case HintKind::pill: return pillWidth(h.key)+12+text;
     case HintKind::optionsMint: return 48+12+text;
-    case HintKind::chord: return pillWidth("L1")+8+textWidth(Face::black,20,"+")+8+pillWidth("R1")+12+text;
+    case HintKind::chord: return pillWidth("L1")+8+pillWidth("R1")+12+text;
     case HintKind::hold: return textWidth(Face::bold,22,"Hold")+10+48+10+textWidth(Face::black,20,"+")+10+58+12+text;
+    case HintKind::combo: return 48+10+textWidth(Face::black,20,"+")+10+44+12+text;
     }
     return text;
 }
@@ -133,10 +136,12 @@ void drawHint(Canvas& c, const Hint& h, float x) {
     case HintKind::pill: x+=pill(c,h.key,x,hintY)+12;break;
     case HintKind::optionsMint: x+=optionsPill(c,x,hintY,mint,mintInk)+12;break;
     case HintKind::chord:
-        x+=pill(c,"L1",x,hintY)+8;x+=label(c,Face::black,20,x,hintY,"+",dim)+8;x+=pill(c,"R1",x,hintY)+12;break;
+        x+=pill(c,"L1",x,hintY)+8;x+=pill(c,"R1",x,hintY)+12;break;
     case HintKind::hold:
         x+=label(c,Face::bold,22,x,hintY,"Hold",muted)+10;x+=optionsPill(c,x,hintY)+10;
         x+=label(c,Face::black,20,x,hintY,"+",dim)+10;x+=touchPill(c,x,hintY)+12;break;
+    case HintKind::combo:
+        x+=optionsPill(c,x,hintY)+10;x+=label(c,Face::black,20,x,hintY,"+",dim)+10;x+=well(c,h.icon,x,hintY)+12;break;
     }
     label(c,Face::bold,hintLabel,x,hintY,h.text,ink);
 }
@@ -149,7 +154,8 @@ void hints(Canvas& c, const Hint* leftHints, unsigned leftCount, const Hint* rig
     for(unsigned i=0;i<rightCount;++i){drawHint(c,rightHints[i],x);x+=hintWidth(rightHints[i])+40;}
 }
 constexpr Hint closeApp{HintKind::glyph,Glyph::circle,nullptr,"Close app"};
-constexpr Hint signOut{HintKind::chord,Glyph::cross,nullptr,"Sign out"};
+constexpr Hint sections{HintKind::chord,Glyph::cross,nullptr,"Sections"};
+constexpr Hint back{HintKind::glyph,Glyph::circle,nullptr,"Back"};
 
 void logo(Canvas& c, float x, float y) {
     c.ring(x+22,y+22,16,8,mint);
@@ -169,7 +175,7 @@ string_view profileSpec(StreamProfile p, char* buffer, std::size_t size) {
     std::snprintf(buffer,size,"%s \xC2\xB7 %s \xC2\xB7 %d Mb/s",s.codec==VideoCodec::hevc?(s.hdr?"HEVC 10-bit":"HEVC"):"H.264",s.hardware?"hardware":"software",s.bitrate_kbps/1000);
     return buffer;
 }
-void topBar(Canvas& c, const Model& m) {
+void topBar(Canvas& c, const Model& m, bool tabs) {
     logo(c,left,66);
     const float base=baselineIn(Face::black,34,56,64);
     const float w=drawText(c,Face::black,34,176,base,"OpenNOW",ink,-0.01f);
@@ -177,21 +183,24 @@ void topBar(Canvas& c, const Model& m) {
     const bool signedIn=m.login.state==State::authenticated;
     const char* account=signedIn?(m.login.sessionSaved?"NVIDIA account saved":"Signed in \xC2\xB7 not saved"):"Not signed in";
     const float aw=textWidth(Face::bold,22,account)+22+12+12+22;
-    float x=right-aw;
+    const float x=right-aw;
     c.roundRect(x,60,aw,56,28,surface);
     c.disc(x+22+6,88,6,signedIn?(m.login.sessionSaved?mint:amber):dim);
     label(c,Face::bold,22,x+22+12+12,88,account,ink);
-    if(!signedIn)return;
-    char name[48],spec[64],chip[128];
-    profileName(m.profile,name,sizeof(name));profileSpec(m.profile,spec,sizeof(spec));
-    std::snprintf(chip,sizeof(chip),"%s \xC2\xB7 %d Mb/s",name,settingsFor(m.profile).bitrate_kbps/1000);
-    const float cw=10+52+14+textWidth(Face::mono,20,chip)+22;
-    x-=20+cw;
-    c.roundRect(x,60,cw,56,28,surface);
-    c.roundRect(x+10,70,52,36,10,raised);
-    const float lw=textWidth(Face::black,18,"L1");
-    label(c,Face::black,18,x+10+26-lw/2,88,"L1",ink);
-    label(c,Face::mono,20,x+10+52+14,88,chip,ink);
+    if(!tabs)return;
+    const char* names[]={"Library","Browse","Settings"};
+    float total=pillWidth("L1")+pillWidth("R1")+40*4;
+    for(unsigned i=0;i<3;++i)total+=textWidth(i==static_cast<unsigned>(m.section)?Face::black:Face::bold,28,names[i]);
+    float at=960-total/2;
+    at+=pill(c,"L1",at,88)+40;
+    for(unsigned i=0;i<3;++i) {
+        const bool active=i==static_cast<unsigned>(m.section);
+        const float tw=textWidth(active?Face::black:Face::bold,28,names[i]);
+        label(c,active?Face::black:Face::bold,28,at,88,names[i],active?ink:muted);
+        if(active)c.roundRect(at,112,tw,4,2,mint);
+        at+=tw+40;
+    }
+    pill(c,"R1",at,88);
 }
 void eyebrow(Canvas& c, float x, float centerY, string_view text, Color color) {label(c,Face::extrabold,22,x,centerY,text,color,0.14f);}
 float headline(Canvas& c, float size, float lineHeight, float top, string_view text, float maxWidth, unsigned maxLines) {
@@ -236,16 +245,49 @@ float fitTitle(string_view title, float maxWidth, float largest, float smallest,
         if(textWidth(Face::black,static_cast<float>(size),title,tracking)<=maxWidth)return static_cast<float>(size);
     return smallest;
 }
-void tile(Canvas& c, const Game& game, float x, float y, bool focused, float fade) {
+constexpr float tileW=art::tileWidth, tileH=art::tileHeight, tileStep=296, gridTop=436, peekTop=834;
+void fallbackTile(Canvas& c, const Game& game, float x, float y, float fade, bool missingArt) {
     const auto colors=storeColors(game.store);
-    const Color top=fade>0?mix(colors.top,ground,fade):focused?mix(colors.top,white,0.08f):colors.top;
-    const Color bottom=fade>0?mix(colors.bottom,ground,fade):colors.bottom;
-    if(focused)c.roundRectStroke(x-11,y-11,264+22,352+22,29,5,mint);
-    c.verticalGradient(x,y,264,352,18,top,bottom);
-    const unsigned alpha=fade>0?static_cast<unsigned>(255*(1-fade)):255;
-    drawFitted(c,Face::black,16,x+24,baselineIn(Face::black,16,y+24,22),game.store,216,white,0.12f,alpha*82/100);
-    const unsigned lines=drawWrapped(c,Face::black,30,0,0,34,game.title,216,4,ink,255,false);
-    drawWrapped(c,Face::black,30,x+24,y+352-24-lines*34.0f,34,game.title,216,4,white,alpha);
+    c.verticalGradient(x,y,tileW,tileH,18,mix(colors.top,ground,fade),mix(colors.bottom,ground,fade));
+    const unsigned alpha=static_cast<unsigned>(255*(1-fade));
+    drawFitted(c,Face::black,14,x+22,baselineIn(Face::black,14,y+22,20),game.store,missingArt?170:204,white,0.12f,alpha*82/100);
+    if(missingArt) {
+        const float ix=x+tileW-22-22, iy=y+22;
+        c.roundRectStroke(ix+3,iy+4,17,14,2.5f,2,white,alpha*55/100);
+        c.line(ix+2,iy+21,ix+20,iy+3,2,white,alpha*55/100);
+    }
+    const unsigned lines=drawWrapped(c,Face::black,28,0,0,32,game.title,204,5,ink,255,false);
+    drawWrapped(c,Face::black,28,x+22,y+tileH-22-lines*32.0f,32,game.title,204,5,white,alpha);
+}
+void loadingTile(Canvas& c, const Game& game, float x, float y, float fade) {
+    c.verticalGradient(x,y,tileW,tileH,18,mix(raised,ground,fade),mix(surface,ground,fade));
+    const unsigned alpha=static_cast<unsigned>(255*(1-fade));
+    c.disc(x+27,y+27,5,mint,alpha);c.disc(x+45,y+27,5,hairline,alpha);c.disc(x+63,y+27,5,hairline,alpha);
+    char tag[96];std::snprintf(tag,sizeof(tag),"%s \xC2\xB7 LOADING ART",game.store);
+    const unsigned lines=drawWrapped(c,Face::black,28,0,0,32,game.title,204,4,ink,255,false);
+    const float titleTop=y+tileH-22-lines*32.0f;
+    drawFitted(c,Face::extrabold,14,x+22,baselineIn(Face::extrabold,14,titleTop-28,20),tag,204,dim,0.12f,alpha);
+    drawWrapped(c,Face::black,28,x+22,titleTop,32,game.title,204,4,muted,alpha);
+}
+void coverTile(Canvas& c, const Model& m, const Game& game, float x, float y, bool focused, float fade, bool ownedBadge) {
+    if(focused)c.roundRectStroke(x-11,y-11,tileW+22,tileH+22,29,5,mint);
+    art::State state=art::State::missing;
+    if(m.art&&*game.art)state=m.art->want(game.art,art::Kind::tile,m.frame);
+    const unsigned alpha=static_cast<unsigned>(255*(1-fade));
+    if(state==art::State::ready&&m.art->draw(c,game.art,art::Kind::tile,x,y,18,alpha)) {
+        const float bw=std::min(textWidth(Face::black,14,game.store,0.1f)+20,tileW-28);
+        c.roundRect(x+14,y+tileH-14-30,bw,30,8,ground,alpha*82/100);
+        drawFitted(c,Face::black,14,x+24,baselineIn(Face::black,14,y+tileH-44,30),game.store,bw-20,ink,0.1f,alpha);
+        if(ownedBadge&&game.owned) {
+            const float ow=6+18+6+textWidth(Face::black,13,"IN LIBRARY",0.1f)+10;
+            c.roundRect(x+tileW-14-ow,y+14,ow,30,15,mint,alpha);
+            glyph(c,Glyph::check,x+tileW-14-ow+15,y+29,mintInk,18);
+            label(c,Face::black,13,x+tileW-14-ow+30,y+29,"IN LIBRARY",mintInk,0.1f,alpha);
+        }
+        return;
+    }
+    if(state==art::State::loading)loadingTile(c,game,x,y,fade);
+    else fallbackTile(c,game,x,y,fade,*game.art!=0);
 }
 void bottomFade(Canvas& c, float from) {
     for(int row=static_cast<int>(from);row<1080;++row) {
@@ -268,42 +310,128 @@ float primaryPill(Canvas& c, float rightX, float y, string_view text) {
     label(c,Face::black,28,x+14+48+18,y+36,text,mintInk);
     return w;
 }
-void library(Canvas& c, const Model& m) {
-    const auto& cv=m.cloud;
-    const unsigned focus=std::min(m.focus,cv.count-1);
-    const Game& game=cv.games[focus];
-    const unsigned rows=(cv.count+gridColumns-1)/gridColumns, row=focus/gridColumns;
-    storePill(c,left,210,game.store);
-    char meta[96];
-    std::snprintf(meta,sizeof(meta),"Entry %u of %u \xC2\xB7 Row %u of %u%s",focus+1,cv.count,row+1,rows,cv.hasNext?" \xC2\xB7 more with R1":"");
-    label(c,Face::bold,22,left+std::min(textWidth(Face::black,18,game.store,0.08f)+28,360.0f)+14,210,meta,muted);
-    const float pillW=primaryPill(c,right,274,"Select");
+void heroBackdrop(Canvas& c, const Model& m, const Game& game) {
+    if(!m.art||!*game.hero||m.art->want(game.hero,art::Kind::hero,m.frame)!=art::State::ready)return;
+    static std::uint8_t columns[1280], rows[720];
+    static bool ready=false;
+    if(!ready) {
+        for(int i=0;i<1280;++i) {
+            const float t=static_cast<float>(i)/1279.0f;
+            const float scrim=t<0.45f?1.0f-(t/0.45f)*0.45f:0.55f-((t-0.45f)/0.55f)*0.40f;
+            columns[i]=static_cast<std::uint8_t>(std::clamp((1.0f-scrim)*0.55f,0.0f,1.0f)*255);
+        }
+        for(int i=0;i<720;++i) {
+            const float t=static_cast<float>(i)/719.0f;
+            const float scrim=t<0.30f?0.35f*(1-t/0.30f):t<0.62f?0.6f*(t-0.30f)/0.32f:t<0.88f?0.6f+0.4f*(t-0.62f)/0.26f:1.0f;
+            rows[i]=static_cast<std::uint8_t>(std::clamp(1.0f-scrim,0.0f,1.0f)*255);
+        }
+        ready=true;
+    }
+    m.art->drawHero(c,game.hero,640,0,1280,720,columns,rows);
+}
+const char* sectionEyebrow(const Model& m) {
+    if(m.section==Section::library)return "YOUR LIBRARY";
+    return *m.searchText?"SEARCH RESULTS":"BROWSE CATALOG";
+}
+void sectionHints(Canvas& c, const Hint* l, unsigned n) {
+    const Hint r[]={sections,closeApp};
+    hints(c,l,n,r,2);
+}
+void grid(Canvas& c, const Model& m) {
+    const auto& v=catalogFor(m.section,m.session,m.library);
+    const unsigned focus=std::min(m.focus,v.count-1);
+    const Game& game=v.games[focus];
+    const bool browse=m.section==Section::browse;
+    heroBackdrop(c,m,game);
+    const float eyebrowW=label(c,Face::extrabold,22,left,230,sectionEyebrow(m),mint,0.14f);
+    if(browse) {
+        char text[160];
+        if(*m.searchText)std::snprintf(text,sizeof(text),"\xE2\x80\x9C%.100s\xE2\x80\x9D \xC2\xB7 new search",m.searchText);
+        else std::snprintf(text,sizeof(text),"Search all games");
+        const float pw=8+28+10+std::min(textWidth(Face::bold,20,text),520.0f)+16;
+        const float px=left+eyebrowW+20;
+        c.roundRect(px,210,pw,40,20,surface,220);
+        c.disc(px+8+14,230,14,raised);glyph(c,Glyph::triangle,px+8+14,230,ink,18);
+        drawFitted(c,Face::bold,20,px+8+28+10,baselineIn(Face::bold,20,210,40),text,520,muted);
+    }
+    const float pillW=primaryPill(c,right,324,"Select");
     const float room=width-pillW-48;
-    const float size=fitTitle(game.title,room,104,64);
-    drawFitted(c,Face::black,size,left,baselineIn(Face::black,size,242+(104-size)/2,size),game.title,room,ink,-0.025f);
-    for(unsigned r=row;r<row+2&&r<rows;++r)
+    const float size=fitTitle(game.title,room,88,60);
+    drawFitted(c,Face::black,size,left,baselineIn(Face::black,size,262+(88-size)/2,size),game.title,room,ink,-0.025f);
+    storePill(c,left,378,game.store);
+    char meta[160];
+    const char* owned=browse?(game.owned?"In your library":"Not in your library"):"In your library";
+    if(v.page||v.hasNext)std::snprintf(meta,sizeof(meta),"%s \xC2\xB7 Game %u of %u \xC2\xB7 Page %u",owned,focus+1,v.count,v.page+1);
+    else std::snprintf(meta,sizeof(meta),"%s \xC2\xB7 Game %u of %u",owned,focus+1,v.count);
+    label(c,Face::bold,22,left+std::min(textWidth(Face::black,18,game.store,0.08f)+28,360.0f)+14,378,meta,muted);
+    const unsigned rows=(v.count+gridColumns-1)/gridColumns, row=focus/gridColumns;
+    for(unsigned r=row;r<row+2&&r<rows+1;++r) {
+        const float y=r==row?gridTop:peekTop;
+        const float fade=r==row?0:0.45f;
         for(unsigned col=0;col<gridColumns;++col) {
             const unsigned index=r*gridColumns+col;
-            if(index>=cv.count)break;
-            tile(c,cv.games[index],left+col*292.8f,386+(r-row)*384.0f,index==focus,r==row?0:0.45f);
+            const float x=left+col*tileStep;
+            if(index<v.count){coverTile(c,m,v.games[index],x,y,index==focus,fade,browse);continue;}
+            if(index==v.count&&(v.hasNext||v.state==CloudState::loading)) {
+                c.roundRectStroke(x,y,tileW,tileH,18,2,hairline);
+                const bool loading=v.state==CloudState::loading;
+                c.disc(x+tileW/2-22,y+tileH/2-40,6,mint);c.disc(x+tileW/2,y+tileH/2-40,6,hairline);c.disc(x+tileW/2+22,y+tileH/2-40,6,hairline);
+                const char* head=loading?"Loading more":"More games";
+                label(c,Face::extrabold,22,x+tileW/2-textWidth(Face::extrabold,22,head)/2,y+tileH/2,head,muted);
+                drawWrapped(c,Face::semibold,18,x+34,y+tileH/2+22,24,"Keep moving past the last game for the next page",180,3,dim);
+            }
+            break;
         }
-    bottomFade(c,780);
-    Hint l[6]={{HintKind::glyph,Glyph::dpad,nullptr,"Browse"},{HintKind::glyph,Glyph::cross,nullptr,"Select"},{HintKind::glyph,Glyph::triangle,nullptr,"Search"},{HintKind::glyph,Glyph::square,nullptr,"Refresh"},{HintKind::pill,Glyph::cross,"L1","Profile"},{HintKind::pill,Glyph::cross,"R1","More games"}};
-    const Hint r[]={closeApp,signOut};
-    hints(c,l,cv.hasNext?6:5,r,2);
+    }
+    bottomFade(c,800);
+    if(v.state==CloudState::failed) {
+        char text[256];std::snprintf(text,sizeof(text),"Couldn\xE2\x80\x99t load that page \xC2\xB7 %s",v.message);
+        const float bw=std::min(textWidth(Face::bold,22,text)+48+44+12,width);
+        c.roundRect(left,888,bw,52,26,surface);
+        c.roundRect(left,888,4,52,2,coral);
+        well(c,Glyph::cross,left+14,914);
+        drawFitted(c,Face::bold,22,left+14+44+12,baselineIn(Face::bold,22,888,52),text,bw-80,coral);
+    }
+    const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,v.state==CloudState::failed?"Try again":"Select"},
+        {HintKind::glyph,Glyph::triangle,nullptr,browse?"Search":"Search catalog"},{HintKind::glyph,Glyph::square,nullptr,"Refresh"}};
+    sectionHints(c,l,4);
 }
 void catalogStatus(Canvas& c, const Model& m) {
-    const bool loading=m.screen==Screen::catalogLoading;
-    eyebrow(c,left,210,loading?"LIBRARY":"LIBRARY \xC2\xB7 EMPTY",loading?mint:muted);
-    headline(c,104,104,242,loading?"Loading your library":"No games here",width,1);
-    drawFitted(c,Face::mono,22,left,baselineIn(Face::mono,22,360,32),*m.cloud.message?m.cloud.message:(loading?"Loading NVIDIA catalog...":""),width,muted);
-    for(unsigned col=0;col<gridColumns;++col)
-        c.roundRect(left+col*292.8f,430,264,352,18,surface,loading?255:150);
-    bottomFade(c,620);
-    if(loading){const Hint r[]={closeApp,signOut};hints(c,nullptr,0,r,2);return;}
-    const Hint l[]={{HintKind::glyph,Glyph::triangle,nullptr,"Search"},{HintKind::glyph,Glyph::square,nullptr,"Refresh"},{HintKind::pill,Glyph::cross,"L1","Profile"}};
-    const Hint r[]={closeApp,signOut};
-    hints(c,l,3,r,2);
+    const auto& v=catalogFor(m.section,m.session,m.library);
+    const bool library=m.section==Section::library;
+    if(m.screen==Screen::catalogLoading) {
+        eyebrow(c,left,230,sectionEyebrow(m),mint);
+        headline(c,88,92,262,library?"Loading your library":"Loading the catalog",width,1);
+        for(unsigned col=0;col<gridColumns;++col)c.roundRect(left+col*tileStep,gridTop,tileW,tileH,18,surface);
+        bottomFade(c,700);
+        sectionHints(c,nullptr,0);
+        return;
+    }
+    if(m.screen==Screen::catalogError) {
+        warningIcon(c,left+18,254,coral);
+        eyebrow(c,left+52,254,library?"LIBRARY UNAVAILABLE":"CATALOG UNAVAILABLE",coral);
+        float y=headline(c,104,108,294,library?"Your library didn\xE2\x80\x99t load":"The catalog didn\xE2\x80\x99t load",1300,1);
+        y=body(c,y+20,library?"The NVIDIA library request failed. Your games are still on your account.":"NVIDIA didn\xE2\x80\x99t return the catalog. Check the connection and try again.",1000,2);
+        detailCard(c,y+28,*v.message?v.message:"No details reported","",coral);
+        button(c,left,y+28+72+48,Glyph::cross,"Try again",true);
+        sectionHints(c,nullptr,0);
+        return;
+    }
+    const bool more=v.hasNext;
+    eyebrow(c,left,254,more?(library?"YOUR LIBRARY \xC2\xB7 STILL LOOKING":"BROWSE \xC2\xB7 STILL LOOKING"):library?"YOUR LIBRARY \xC2\xB7 EMPTY":"BROWSE \xC2\xB7 NO RESULTS",muted);
+    float y=headline(c,104,108,294,more?"No owned games found yet":library?"Nothing in your library yet":"No games found",1400,1);
+    char text[256];
+    if(more)std::snprintf(text,sizeof(text),"OpenNOW looked through catalog page %u without finding a game you own. More pages remain, so your library may continue further on.",v.page+1);
+    else if(library)std::snprintf(text,sizeof(text),"Games you add to your GeForce NOW library on your NVIDIA account show up here. Browse the full catalog to find something to play.");
+    else if(*m.searchText)std::snprintf(text,sizeof(text),"Nothing matched \xE2\x80\x9C%.100s\xE2\x80\x9D. Try a shorter title.",m.searchText);
+    else std::snprintf(text,sizeof(text),"%s",v.message);
+    y=body(c,y+24,text,1000,2);
+    float x=left;
+    if(more)x+=button(c,x,y+40,Glyph::cross,"Keep looking",true)+20;
+    else if(library)x+=button(c,x,y+40,Glyph::cross,"Browse catalog",true)+20;
+    else x+=button(c,x,y+40,Glyph::triangle,"Search",true)+20;
+    button(c,x,y+40,Glyph::square,"Refresh",false);
+    sectionHints(c,nullptr,0);
 }
 
 void search(Canvas& c, const Model& m) {
@@ -337,17 +465,17 @@ void search(Canvas& c, const Model& m) {
             label(c,Face::extrabold,36,x+52-kw/2,y+44,key,color);
         }
     }
-    label(c,Face::semibold,24,left,850,"Searches the NVIDIA catalog by title. Results replace the library list.",dim);
+    label(c,Face::semibold,24,left,850,"Searches the full NVIDIA catalog by title. Results open in Browse.",dim);
     const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Type"},{HintKind::glyph,Glyph::square,nullptr,"Backspace"},{HintKind::glyph,Glyph::triangle,nullptr,"Clear"}};
     const Hint r[]={{HintKind::optionsMint,Glyph::options,nullptr,"Search"},{HintKind::glyph,Glyph::circle,nullptr,"Cancel"}};
     hints(c,l,4,r,2);
 }
 
 void detail(Canvas& c, const Model& m) {
-    const auto& cv=m.cloud;
+    const auto& cv=catalogFor(m.section,m.session,m.library);
     const unsigned focus=std::min(m.focus,cv.count-1);
     const Game& game=cv.games[focus];
-    eyebrow(c,left,205,"FROM THE CATALOG",muted);
+    eyebrow(c,left,205,m.section==Section::library?"FROM YOUR LIBRARY":"FROM THE CATALOG",muted);
     const float room=1000;
     const float size=fitTitle(game.title,room,128,72);
     if(textWidth(Face::black,size,game.title,-0.03f)<=room)
@@ -421,9 +549,9 @@ void step(Canvas& c, float y, int number, string_view text, int state) {
     label(c,state==1?Face::black:Face::bold,30,left+64,cy,text,state==0?dim:ink);
 }
 void progress(Canvas& c, const Model& m) {
-    const auto& cv=m.cloud;
+    const auto& cv=m.session;
     const bool connecting=m.screen==Screen::connecting;
-    const Game* game=cv.selected<cv.count?&cv.games[cv.selected]:nullptr;
+    const Game* game=*cv.current.title?&cv.current:nullptr;
     char title[256];
     if(game)std::snprintf(title,sizeof(title),"%s \xC2\xB7 %s ON %s",connecting?"CONNECTING":"STARTING",game->title,game->store);
     else std::snprintf(title,sizeof(title),"%s",connecting?"CONNECTING":"STARTING");
@@ -460,36 +588,216 @@ void progress(Canvas& c, const Model& m) {
         const float uw=textWidth(Face::bold,24,"updates live");
         label(c,Face::bold,24,cx-uw/2,cy+138,"updates live",muted);
     }
-    drawFitted(c,Face::mono,22,left,baselineIn(Face::mono,22,hintY-16,32),cv.message,980,dim);
+    drawFitted(c,Face::mono,22,left,baselineIn(Face::mono,22,m.streaming?hintY-86:hintY-16,32),cv.message,980,dim);
+    const Hint l[]={{HintKind::glyph,Glyph::touch,nullptr,"Mouse"},{HintKind::combo,Glyph::triangle,nullptr,"Keyboard"},{HintKind::combo,Glyph::square,nullptr,"Back"}};
     const Hint r[]={{HintKind::hold,Glyph::options,nullptr,m.streaming?"End session":"Cancel session"}};
-    hints(c,nullptr,0,r,1);
+    hints(c,l,m.streaming?3:0,r,1);
+}
+
+void streamKeyboard(Canvas& c, const Model& m) {
+    const auto& k=m.keyboard;
+    char tag[192];
+    if(*m.session.current.title)std::snprintf(tag,sizeof(tag),"KEYBOARD \xC2\xB7 TYPING INTO %s",m.session.current.title);
+    else std::snprintf(tag,sizeof(tag),"KEYBOARD \xC2\xB7 TYPING INTO YOUR GAME");
+    for(char* p=tag;*p;++p)if(*p>='a'&&*p<='z')*p=static_cast<char>(*p-32);
+    drawFitted(c,Face::extrabold,22,left,baselineIn(Face::extrabold,22,193,24),tag,width,mint,0.14f);
+    c.roundRect(left,240,width,120,24,mint);
+    c.roundRect(left,240,width,116,24,surface);
+    char state[48]="NO MODIFIERS";
+    std::size_t at=0;
+    for(const auto& [on,name]:{std::pair{k.shift,"SHIFT"},std::pair{k.caps,"CAPS LOCK"},std::pair{k.ctrl,"CTRL"},std::pair{k.alt,"ALT"}})
+        if(on)at+=std::snprintf(state+at,sizeof(state)-at,"%s%s",at?" + ":"",name);
+    const float stateW=labelRight(c,Face::extrabold,22,right-36,300,state,at?mint:dim,0.14f);
+    drawFitted(c,Face::black,56,left+36,baselineIn(Face::black,56,300-40,80),m.inputReady?"Keys go straight to your game":"Waiting for game input",
+        width-72-stateW-48,m.inputReady?muted:amber,-0.01f);
+    const float pitch=width/StreamKeyboard::units;
+    for(unsigned i=0;i<StreamKeyboard::count;++i) {
+        const auto& key=StreamKeyboard::keys[i];
+        const float x=left+StreamKeyboard::column(i)*pitch, y=396+StreamKeyboard::row(i)*96.0f, w=key.width*pitch-12;
+        const bool focused=i==k.selected, latched=k.latched(i);
+        if(focused)c.roundRectStroke(x-9,y-9,w+18,102,25,4,mint);
+        c.roundRect(x,y,w,84,16,focused?mint:latched?mix(surface,mint,0.24f):surface);
+        const Color color=focused?mintInk:latched?mint:m.inputReady?ink:dim;
+        if(key.vk>=0x25&&key.vk<=0x28) {
+            const float cx=x+w/2, cy=y+42, dx=key.vk==0x25?-1.0f:key.vk==0x27?1.0f:0.0f, dy=key.vk==0x26?-1.0f:key.vk==0x28?1.0f:0.0f;
+            c.line(cx-dx*13,cy-dy*13,cx+dx*13,cy+dy*13,4,color);
+            c.line(cx+dx*13,cy+dy*13,cx+dx*3-dy*10,cy+dy*3+dx*10,4,color);
+            c.line(cx+dx*13,cy+dy*13,cx+dx*3+dy*10,cy+dy*3-dx*10,4,color);
+            continue;
+        }
+        const char* name=k.label(i);
+        const bool word=name[1]!=0;
+        const Face face=word?Face::bold:Face::extrabold;
+        const float size=word?26:36, kw=textWidth(face,size,name);
+        label(c,face,size,x+w/2-kw/2,y+42,name,color);
+    }
+    label(c,Face::semibold,24,left,912,m.inputReady?"The picture returns when you close the keyboard. Your game and audio keep running.":
+        "Key presses are ignored until the game\xE2\x80\x99s input channel opens. The picture returns when you close the keyboard.",dim);
+    const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Press key"},
+        {HintKind::glyph,Glyph::square,nullptr,"Backspace"},{HintKind::glyph,Glyph::triangle,nullptr,"Space"},{HintKind::pill,Glyph::cross,"L1","Shift"}};
+    const Hint r[]={{HintKind::glyph,Glyph::circle,nullptr,"Back to game"}};
+    hints(c,l,5,r,1);
 }
 
 void failure(Canvas& c, const Model& m) {
-    const auto& cv=m.cloud;
+    const auto& cv=m.session;
     const Screen s=m.screen;
-    const char* tag=s==Screen::streamEnded?"STREAM ENDED":s==Screen::cleanupFailed?"SESSION STILL RUNNING":"CATALOG UNAVAILABLE";
-    const char* head=s==Screen::streamEnded?"The connection to your game dropped":s==Screen::cleanupFailed?"We couldn\xE2\x80\x99t end the cloud session":"Your library didn\xE2\x80\x99t load";
+    const char* tag=s==Screen::streamEnded?"STREAM ENDED":s==Screen::cleanupFailed?"SESSION STILL RUNNING":"COULDN\xE2\x80\x99T START";
+    const char* head=s==Screen::streamEnded?"The connection to your game dropped":s==Screen::cleanupFailed?"We couldn\xE2\x80\x99t end the cloud session":"The game didn\xE2\x80\x99t start";
     const char* text=s==Screen::streamEnded?"OpenNOW stopped the cloud session, so nothing keeps running on your account. You can try again right away.":
         s==Screen::cleanupFailed?"It may still be running on your account. End it before starting another game.":
-        "NVIDIA didn\xE2\x80\x99t return the catalog. Check the connection and try again.";
+        "The cloud session could not be started or confirmed. You can try again or go back.";
     warningIcon(c,left+18,314,coral);
     eyebrow(c,left+52,314,tag,coral);
     float y=headline(c,104,108,354,head,1300,2);
     y=body(c,y+24,text,980,2);
     char second[256]{};
-    const Game* game=cv.selected<cv.count?&cv.games[cv.selected]:nullptr;
-    if(s!=Screen::catalogError&&game) {
+    if(*cv.current.title) {
         char name[48];
-        std::snprintf(second,sizeof(second),"%s \xC2\xB7 %s \xC2\xB7 %s",game->title,game->store,profileName(m.profile,name,sizeof(name)).data());
+        std::snprintf(second,sizeof(second),"%s \xC2\xB7 %s \xC2\xB7 %s",cv.current.title,cv.current.store,profileName(m.launchProfile,name,sizeof(name)).data());
     }
     detailCard(c,y+28,*cv.message?cv.message:"No details reported",second,coral);
     float x=left;
-    if(s==Screen::streamEnded){x+=button(c,x,944,Glyph::cross,"Try again",true)+20;button(c,x,944,Glyph::square,"Back to library",false);}
-    else if(s==Screen::catalogError){x+=button(c,x,944,Glyph::cross,"Try again",true)+20;button(c,x,944,Glyph::triangle,"Search",false);}
+    if(s==Screen::streamEnded){x+=button(c,x,944,Glyph::cross,"Try again",true)+20;button(c,x,944,Glyph::square,"Back to games",false);}
+    else if(s==Screen::launchFailed){x+=button(c,x,944,Glyph::cross,"Try again",true)+20;button(c,x,944,Glyph::circle,"Back",false);return;}
     else holdButton(c,x,944,"End session");
     const float closeW=16+48+16+textWidth(Face::black,28,"Close app")+36;
     button(c,right-closeW,944,Glyph::circle,"Close app",false);
+}
+
+void settingsRow(Canvas& c, float x, float y, float w, float h, bool focused) {
+    c.roundRect(x,y,w,h,22,surface);
+    if(focused)c.roundRectStroke(x-4,y-4,w+8,h+8,26,4,mint);
+}
+void infoRow(Canvas& c, float x, float y, float w, string_view key, string_view value, string_view sub) {
+    c.roundRect(x,y,w,116,22,surface);
+    label(c,Face::extrabold,28,x+32,y+44,key,ink);
+    label(c,Face::semibold,20,x+32,y+80,sub,dim);
+    const float vw=std::min(textWidth(Face::mono,24,value),w-420);
+    drawFitted(c,Face::mono,24,x+w-32-vw,baselineIn(Face::mono,24,y+40,36),value,w-420,ink);
+}
+void settings(Canvas& c, const Model& m) {
+    const char* panes[]={"Stream","Display & audio","Account","About"};
+    for(unsigned i=0;i<settingsPanes;++i) {
+        const float y=216+i*80.0f;
+        const bool active=i==static_cast<unsigned>(m.pane);
+        if(active) {
+            c.roundRect(left,y,400,72,18,surface);
+            c.roundRect(left+24,y+20,6,32,3,mint);
+            if(!m.settingsContent)c.roundRectStroke(left-4,y-4,408,80,22,4,mint);
+        }
+        label(c,active?Face::black:Face::bold,28,left+46,y+36,panes[i],active?ink:muted);
+    }
+    const float x=592, w=right-x;
+    const auto title=[&](string_view head,string_view sub){
+        drawText(c,Face::black,72,x,baselineIn(Face::black,72,214,76),head,ink,-0.02f);
+        drawWrapped(c,Face::semibold,26,x,302,36,sub,w,2,muted);
+    };
+    char name[48],spec[64];
+    if(m.pane==SettingsPane::stream) {
+        title("Stream","Defaults for new sessions on this PS5. You can still pick a profile per game.");
+        const bool rowFocus=m.settingsContent&&m.settingsRow==0;
+        settingsRow(c,x,378,w,176,rowFocus);
+        label(c,Face::extrabold,30,x+32,424,"Default stream profile",ink);
+        const char* status=m.settings.saveError?"Couldn\xE2\x80\x99t save on this PS5 \xC2\xB7 used for this session only":
+            m.settings.savedUnavailable?"Saved profile isn\xE2\x80\x99t qualified here \xC2\xB7 using best available":
+            m.settings.loadCorrupt?"Saved settings were unreadable and were ignored":
+            m.settings.loadUnreadable?"Saved settings couldn\xE2\x80\x99t be read \xC2\xB7 using best available":
+            m.settings.saved?"Used when you press Play. Saved on this PS5.":"Used when you press Play. Best available until you change it.";
+        const Color statusColor=m.settings.saveError?coral:(m.settings.savedUnavailable||m.settings.loadCorrupt||m.settings.loadUnreadable)?amber:muted;
+        drawFitted(c,Face::semibold,22,x+32,baselineIn(Face::semibold,22,448,30),status,w-480,statusColor);
+        if(m.settings.saveError){char code[48];std::snprintf(code,sizeof(code),"error %d",m.settings.saveError);label(c,Face::mono,20,x+32,508,code,coral);}
+        else label(c,Face::mono,22,x+32,508,profileSpec(m.profile,spec,sizeof(spec)),ink);
+        const float sw=356, sx=x+w-32-sw;
+        c.roundRect(sx,410,sw,64,32,rowFocus?mint:raised);
+        const Color sc=rowFocus?mintInk:ink;
+        c.line(sx+38,432,sx+29,442,3,sc);c.line(sx+29,442,sx+38,452,3,sc);
+        c.line(sx+sw-38,432,sx+sw-29,442,3,sc);c.line(sx+sw-29,442,sx+sw-38,452,3,sc);
+        const string_view current=profileName(m.profile,name,sizeof(name));
+        const float nw=std::min(textWidth(Face::black,26,current),sw-120);
+        drawFitted(c,Face::black,26,sx+sw/2-nw/2,baselineIn(Face::black,26,410,64),current,sw-120,sc);
+        StreamProfile options[static_cast<unsigned>(StreamProfile::count)];
+        const unsigned count=availableProfiles(m.profileMask,options,static_cast<unsigned>(StreamProfile::count));
+        unsigned position=0;for(unsigned i=0;i<count;++i)if(options[i]==m.profile)position=i;
+        char of[48];std::snprintf(of,sizeof(of),"%u of %u qualified on this PS5",position+1,count);
+        labelRight(c,Face::bold,20,x+w-32,508,of,dim);
+        label(c,Face::extrabold,20,x+32,598,"QUALIFIED AT STARTUP",dim,0.14f);
+        float cx=x+32, cy=626;
+        for(unsigned i=0;i<count;++i) {
+            const string_view chip=profileName(options[i],name,sizeof(name));
+            const float cw=textWidth(Face::bold,20,chip)+32;
+            if(cx+cw>x+w-32){cx=x+32;cy+=50;}
+            const bool on=options[i]==m.profile;
+            if(on)c.roundRect(cx,cy,cw,40,20,raised);
+            c.roundRectStroke(cx,cy,cw,40,20,2,on?mint:hairline);
+            label(c,Face::bold,20,cx+16,cy+20,chip,on?ink:muted);
+            cx+=cw+10;
+        }
+        drawWrapped(c,Face::semibold,20,x+32,cy+52,28,"Hardware profiles appear only after this PS5 decodes and presents the startup test streams. Software profiles are always available.",w-64,2,dim);
+        const bool resetFocus=m.settingsContent&&m.settingsRow==1;
+        const float ry=std::max(cy+124,820.0f);
+        if(resetFocus)settingsRow(c,x,ry,w,112,true);
+        else c.roundRectStroke(x,ry,w,112,22,2,raised);
+        label(c,Face::extrabold,28,x+32,ry+40,"Reset to best available",ink);
+        label(c,Face::semibold,22,x+32,ry+76,"Forgets the saved default. Your NVIDIA login stays.",muted);
+        const float rw=44+12+textWidth(Face::bold,24,"Reset");
+        well(c,Glyph::cross,x+w-32-rw,ry+56);
+        label(c,Face::bold,24,x+w-32-rw+56,ry+56,"Reset",ink);
+    } else if(m.pane==SettingsPane::display) {
+        title("Display & audio","Reported by this PS5 when OpenNOW starts. Nothing here can be changed.");
+        string_view output(m.output?m.output:"");
+        if(output.rfind("OUTPUT ",0)==0)output.remove_prefix(7);
+        infoRow(c,x,384,w,"Video output",output,"VideoOut mode chosen at startup");
+        const unsigned hevc=profileBit(StreamProfile::native_hdr120)|profileBit(StreamProfile::native_hdr90)|profileBit(StreamProfile::native_hdr60);
+        const unsigned h264=profileBit(StreamProfile::native_4k120)|profileBit(StreamProfile::native_4k90)|profileBit(StreamProfile::native_1080);
+        const char* codecs=(m.profileMask&hevc)&&(m.profileMask&h264)?"HEVC 10-bit \xC2\xB7 H.264":(m.profileMask&hevc)?"HEVC 10-bit":(m.profileMask&h264)?"H.264":"Software decoding only";
+        infoRow(c,x,514,w,"Hardware video",codecs,"Codecs that passed the startup test streams");
+        infoRow(c,x,644,w,"Audio","Opus \xC2\xB7 stereo","Negotiated for every session");
+        drawWrapped(c,Face::semibold,22,x+32,790,32,"To change resolution or HDR for the whole console, use the PS5\xE2\x80\x99s own Settings \xE2\x80\xBA Screen and Video, then restart OpenNOW.",w-64,2,muted);
+    } else if(m.pane==SettingsPane::account) {
+        title("Account","Your NVIDIA sign-in for GeForce NOW on this PS5.");
+        c.roundRect(x,380,w,126,22,surface);
+        c.disc(x+32+32,443,32,raised);glyph(c,Glyph::check,x+64,443,mint,30);
+        label(c,Face::extrabold,30,x+120,424,"Signed in to NVIDIA",ink);
+        label(c,Face::semibold,22,x+120,462,m.login.sessionSaved?"Login saved on this PS5 and restored when OpenNOW starts.":"Signed in for now \xC2\xB7 the login couldn\xE2\x80\x99t be saved on this PS5.",m.login.sessionSaved?muted:amber);
+        settingsRow(c,x,520,w,126,m.settingsContent);
+        label(c,Face::extrabold,30,x+32,564,"Sign out",coral);
+        label(c,Face::semibold,22,x+32,602,"Removes the saved login. Signing in again needs a new code.",muted);
+        const float sw=44+12+textWidth(Face::bold,24,"Sign out\xE2\x80\xA6");
+        well(c,Glyph::cross,x+w-32-sw,583);
+        label(c,Face::bold,24,x+w-32-sw+56,583,"Sign out\xE2\x80\xA6",ink);
+        label(c,Face::extrabold,20,x+32,690,"GOOD TO KNOW",dim,0.14f);
+        drawWrapped(c,Face::semibold,22,x+32,712,32,"OpenNOW never asks for your NVIDIA password. Sign-in happens on NVIDIA\xE2\x80\x99s site with a one-time code from this PS5.",w-64,2,muted);
+    } else {
+        title("About","OpenNOW for PS5 is an independent, unofficial GeForce NOW client.");
+        infoRow(c,x,384,w,"Version",OPENNOW_VERSION,"Alpha build");
+        c.roundRect(x,514,w,240,22,surface);
+        label(c,Face::extrabold,28,x+32,558,"Credits & licenses",ink);
+        drawWrapped(c,Face::semibold,22,x+32,584,32,"Built on OpenNOW and OpenNOW-Switch by Open Cloud Gaming. Fonts: Nunito and IBM Plex Mono (SIL OFL 1.1). stb_truetype and stb_image (public domain / MIT). Full notices ship with the app in THIRD_PARTY_NOTICES.",w-64,4,muted);
+        drawWrapped(c,Face::semibold,22,x+32,790,32,"Not affiliated with NVIDIA or Sony. GeForce NOW is a trademark of NVIDIA.",w-64,2,dim);
+    }
+    if(m.confirmSignOut) {
+        c.roundRect(0,0,1920,1080,0,rgb(0x06090C),200);
+        c.roundRect(480,300,960,548,32,surface);
+        label(c,Face::extrabold,22,536,370,"SIGN OUT",coral,0.14f);
+        drawWrapped(c,Face::black,64,536,400,68,"Sign out of NVIDIA on this PS5?",848,2,ink);
+        drawWrapped(c,Face::semibold,26,536,560,38,"The saved login is deleted from this PS5. Signing out doesn\xE2\x80\x99t remove games from your GeForce NOW library or change purchases on Steam, Epic or other stores.",848,3,muted);
+        const float bw=16+48+16+textWidth(Face::black,28,"Sign out")+36;
+        c.roundRectStroke(527,705,bw+18,98,49,4,mint);
+        c.roundRect(536,714,bw,80,40,coral);
+        c.disc(536+16+24,754,24,rgb(0x3A0E0A));glyph(c,Glyph::cross,536+40,754,ink);
+        label(c,Face::black,28,536+80,754,"Sign out",rgb(0x3A0E0A));
+        button(c,536+bw+20,714,Glyph::circle,"Cancel",false);
+        return;
+    }
+    if(m.settingsContent) {
+        const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,m.pane==SettingsPane::stream&&m.settingsRow==0?"Move / change":"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Select"}};
+        const Hint r[]={back};
+        hints(c,l,m.pane==SettingsPane::stream&&m.settingsRow==0?1:2,r,1);
+        return;
+    }
+    const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Open"}};
+    sectionHints(c,l,settingsRows(m.pane)?2:1);
 }
 
 void signIn(Canvas& c, const Model& m) {
@@ -550,17 +858,31 @@ void signIn(Canvas& c, const Model& m) {
 Screen screenFor(const Inputs& in) noexcept {
     if(in.streaming)return Screen::connecting;
     if(in.login.state!=State::authenticated)return Screen::signIn;
-    const auto state=in.cloud.state;
+    const auto state=in.session.state;
     if(in.sessionOwned||state==CloudState::starting||state==CloudState::queued||state==CloudState::ready) {
         if(in.sessionOwned&&state==CloudState::failed)return Screen::cleanupFailed;
         return state==CloudState::ready?Screen::connecting:Screen::launching;
     }
-    if(in.searchOpen&&(state==CloudState::catalog||state==CloudState::failed))return Screen::search;
-    if(state==CloudState::failed)return Screen::catalogError;
-    if(state!=CloudState::catalog)return Screen::catalogLoading;
     if(in.streamFailed)return Screen::streamEnded;
-    if(!in.cloud.count)return Screen::catalogEmpty;
-    return in.detailOpen?Screen::detail:Screen::library;
+    if(in.session.launchError)return Screen::launchFailed;
+    if(in.searchOpen)return Screen::search;
+    if(in.section==Section::settings)return Screen::settings;
+    const auto& view=catalogFor(in.section,in.session,in.library);
+    if(view.count) {
+        if(in.detailOpen&&view.state==CloudState::catalog)return Screen::detail;
+        return Screen::grid;
+    }
+    if(view.state==CloudState::failed)return Screen::catalogError;
+    if(view.state==CloudState::catalog)return Screen::catalogEmpty;
+    return Screen::catalogLoading;
+}
+
+const CloudView& catalogFor(Section section,const CloudView& session,const CloudView& library) noexcept {
+    return section==Section::library?library:session;
+}
+
+unsigned settingsRows(SettingsPane pane) noexcept {
+    return pane==SettingsPane::stream?2:pane==SettingsPane::account?1:0;
 }
 
 unsigned availableProfiles(unsigned mask, StreamProfile* out, unsigned capacity) noexcept {
@@ -582,15 +904,19 @@ unsigned storeSiblings(const CloudView& cloud, unsigned index, unsigned* out, un
 void render(Canvas& c, const Model& m) noexcept {
     loadFonts();
     c.clear(ground);
-    topBar(c,m);
+    const bool tabs=m.screen==Screen::grid||m.screen==Screen::catalogLoading||m.screen==Screen::catalogEmpty||
+                    m.screen==Screen::catalogError||m.screen==Screen::settings;
+    topBar(c,m,tabs);
     switch(m.screen) {
     case Screen::signIn: signIn(c,m);break;
-    case Screen::catalogLoading: case Screen::catalogEmpty: catalogStatus(c,m);break;
-    case Screen::catalogError: case Screen::cleanupFailed: case Screen::streamEnded: failure(c,m);break;
-    case Screen::library: library(c,m);break;
+    case Screen::catalogLoading: case Screen::catalogEmpty: case Screen::catalogError: catalogStatus(c,m);break;
+    case Screen::cleanupFailed: case Screen::streamEnded: case Screen::launchFailed: failure(c,m);break;
+    case Screen::grid: grid(c,m);break;
     case Screen::search: search(c,m);break;
     case Screen::detail: detail(c,m);break;
+    case Screen::settings: settings(c,m);break;
     case Screen::launching: case Screen::connecting: progress(c,m);break;
+    case Screen::keyboard: streamKeyboard(c,m);break;
     }
 }
 }

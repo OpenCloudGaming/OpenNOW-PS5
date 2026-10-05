@@ -707,6 +707,67 @@ void Canvas::disc(float cx, float cy, float radius, Color color, unsigned alpha)
                [&](float px, float py) { return std::hypot(px - cx, py - cy) - radius; });
 }
 
+void Canvas::imageRounded(int x, int y, unsigned width, unsigned height,
+                          const std::uint32_t *data, float radius, unsigned alpha) noexcept
+{
+    if (!data)
+        return;
+    const float w = static_cast<float>(width), h = static_cast<float>(height);
+    for (unsigned row = 0; row < height; ++row)
+    {
+        const int py = y + static_cast<int>(row);
+        if (py < 0 || py >= static_cast<int>(frame_height))
+            continue;
+        const float cy = static_cast<float>(row) + 0.5f;
+        const bool corner = cy < radius || cy > h - radius;
+        for (unsigned column = 0; column < width; ++column)
+        {
+            const int px = x + static_cast<int>(column);
+            if (px < 0 || px >= static_cast<int>(frame_width))
+                continue;
+            const float cx = static_cast<float>(column) + 0.5f;
+            unsigned coverage = alpha;
+            if (corner && (cx < radius || cx > w - radius))
+            {
+                const float d = round_rect_distance(cx, cy, 0, 0, w, h, radius);
+                if (d >= 0.5f)
+                    continue;
+                if (d > -0.5f)
+                    coverage = static_cast<unsigned>((0.5f - d) * static_cast<float>(alpha) + 0.5f);
+            }
+            blend_pixel(pixels_, static_cast<unsigned>(px), static_cast<unsigned>(py),
+                        static_cast<Color>(data[std::size_t(row) * width + column]), coverage);
+        }
+    }
+}
+
+void Canvas::imageFaded(int x, int y, unsigned width, unsigned height, const std::uint32_t *data,
+                        unsigned sourceWidth, unsigned sourceHeight,
+                        const std::uint8_t *columnAlpha, const std::uint8_t *rowAlpha) noexcept
+{
+    if (!data || !columnAlpha || !rowAlpha || !width || !height || !sourceWidth || !sourceHeight)
+        return;
+    for (unsigned row = 0; row < height; ++row)
+    {
+        const int py = y + static_cast<int>(row);
+        if (py < 0 || py >= static_cast<int>(frame_height) || !rowAlpha[row])
+            continue;
+        const std::size_t sourceRow = std::size_t(row) * sourceHeight / height;
+        for (unsigned column = 0; column < width; ++column)
+        {
+            const int px = x + static_cast<int>(column);
+            if (px < 0 || px >= static_cast<int>(frame_width))
+                continue;
+            const unsigned alpha = (unsigned(columnAlpha[column]) * rowAlpha[row] + 127) / 255;
+            if (!alpha)
+                continue;
+            const std::size_t sourceColumn = std::size_t(column) * sourceWidth / width;
+            blend_pixel(pixels_, static_cast<unsigned>(px), static_cast<unsigned>(py),
+                        static_cast<Color>(data[sourceRow * sourceWidth + sourceColumn]), alpha);
+        }
+    }
+}
+
 void Canvas::polygon(const float *points, unsigned count, Color color, unsigned alpha) noexcept
 {
     if (!points || count < 3)
