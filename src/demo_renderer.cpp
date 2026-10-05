@@ -840,8 +840,7 @@ void run(DrawScene draw, std::string_view ready_message) noexcept
         (void)sceSystemServiceHideSplashScreen();
         while(!stopRequested.load()) {
             if(draw(canvas)) {
-                if(!opennow::gpu::takeVideoDrawn())opennow::gpu::drawInterface(pixels);
-                if(!opennow::gpu::swap())halt("OpenNOW: GPU presentation failed");
+                if(!opennow::gpu::present(pixels))halt("OpenNOW: GPU presentation failed");
             } else sceKernelUsleep(1000);
         }
         std::free(pixels);

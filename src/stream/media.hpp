@@ -3,26 +3,33 @@
 #include "video_recovery.hpp"
 #include "compressed_queue.hpp"
 #include "stream_settings.hpp"
+#include "audio_receiver.hpp"
+#include "audio_output.hpp"
 #include "native/hardware_decoder.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <pthread.h>
-struct AVCodecContext;struct AVFrame;struct AVPacket;struct SwsContext;struct OpusDecoder;
+struct AVCodecContext;struct AVFrame;struct AVPacket;struct SwsContext;
 namespace opennow {
 class Media {
 public:
- bool start(const StreamSettings& = {}) noexcept;
+ bool start(const StreamSettings& = {},unsigned audioChannels=2) noexcept;
+ static unsigned availableAudioChannels() noexcept;
+ bool configureAudio(const audio::Format&) noexcept;
+ unsigned audioCapacity() const noexcept {return audioOutput_.channels();}
  void stop() noexcept;
  void requireKeyframe() noexcept;
  bool video(const std::uint8_t*,std::size_t) noexcept;
  void audio(const std::uint8_t*,std::size_t,std::uint16_t,std::uint8_t,std::uint32_t) noexcept;
- bool draw(ps5::demo::Canvas&) noexcept;
+ bool draw(ps5::demo::Canvas&,bool redraw=false) noexcept;
+ bool hardwareVideo() const noexcept {return settings_.hardware();}
  std::atomic_uint frames{0},dropped{0},videoUnits{0},audioPackets{0},audioErrors{0},audioRecovered{0},audioConcealed{0},audioUnderruns{0},queueDrops{0},corruptFrames{0},recoveryResets{0},idrFrames{0};
  std::atomic_uint presented{0};
  std::atomic_bool actualHdr{false};
  std::atomic_int decodedWidth{0},decodedHeight{0};
  std::atomic_uint videoBytes{0};
+ std::atomic_uint audioChannels{0},audioBytes{0},audioSamples{0},audioQueueFrames{0},audioQueuePeak{0},audioDroppedFrames{0},audioOutputErrors{0},audioFecAttempts{0},audioStereoFallbacks{0};
  std::atomic_int decodeError{0};
  std::atomic_uint queueDepth{0},queuePeak{0},decodeCalls{0},gpuCalls{0};
  std::atomic<std::uint64_t> decodeUs{0},decodeMaxUs{0},queueMaxUs{0},gpuUs{0},gpuMaxUs{0};
@@ -36,11 +43,13 @@ public:
  ~Media(){stop();}
 private:
  void clearNativePending() noexcept;
+ void updateAudioStats() noexcept;
  static void* decode(void*);static void* output(void*);
- static constexpr unsigned cap=8*1024*1024, audioFrames=5760;
+ static constexpr unsigned cap=8*1024*1024;
  video::CompressedQueue compressed_;
  std::uint32_t* pixels_=nullptr;bool fresh_=false;video::Recovery recovery_;
- std::int16_t pcm_[audioFrames*2]{};unsigned read_=0,used_=0;
+ audio::Receiver audioReceiver_;
+ audio::Output audioOutput_;
  pthread_mutex_t lock_=PTHREAD_MUTEX_INITIALIZER;
  pthread_cond_t wake_=PTHREAD_COND_INITIALIZER;
  std::atomic_bool running_{false};void* videoThread_=nullptr;void* audioThread_=nullptr;
@@ -49,7 +58,6 @@ private:
  video::NativeMode nativeMode_{};video::HardwareDecoder nativeDecoder_;
  video::HardwareDecoder::Picture pendingPicture_{};bool nativePending_=false,nativeInFlight_=false;
 #endif
- AVCodecContext* codec_=nullptr;SwsContext* scaler_=nullptr;OpusDecoder* opus_=nullptr;
- int audioHandle_=-1;std::uint16_t lastSequence_=0;bool sequenceSeen_=false;std::uint32_t expectedAudioTimestamp_=0;
+ AVCodecContext* codec_=nullptr;SwsContext* scaler_=nullptr;
 };
 }

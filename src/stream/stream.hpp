@@ -30,7 +30,7 @@ public:
  const char* status() const {return status_;}
 private:
  void fail(const char*);void release();
- void sendInput(const wire::Bytes&);void releaseKey(std::uint64_t now);
+ bool sendInput(const wire::Bytes&);bool releaseKey(std::uint64_t now);
  void message(const std::string&);void payload(cJSON*);void send(cJSON*);
  void sendCandidates();
  void recoverVideoLoss();
@@ -59,5 +59,9 @@ private:
  bool keyHeld_=false;
  std::uint8_t mouseHeld_=0;
  std::uint64_t keyUpAt_=0,nextKeyAt_=0;
+ std::uint8_t heldModifiers_=0;
+ InputEvent pendingInput_{};
+ bool pendingInputValid_=false,releasingInputs_=false,releasingKey_=false,cursorWanted_=false;
+ std::uint64_t nextCursorCapture_=0;
 };
 }

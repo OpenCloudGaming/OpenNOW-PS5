@@ -16,6 +16,10 @@ std::optional<video::NativeMode> allocationFor(const StreamSettings&) noexcept;
 bool drawVideo(const video::NativeSurface&,const video::NativeMode&) noexcept;
 void drawInterface(const std::uint32_t*) noexcept;
 bool swap() noexcept;
-bool takeVideoDrawn() noexcept;
+void setOverlay(bool active,bool changed) noexcept;
+bool overlayPending() noexcept;
+bool hasRetainedVideo() noexcept;
+void invalidateVideo() noexcept;
+bool present(const std::uint32_t* pixels) noexcept;
 const char* outputLabel() noexcept;
 }

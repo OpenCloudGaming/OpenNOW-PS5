@@ -37,11 +37,12 @@ constexpr ModifierKey modifierKeys[]={{modifierShift,0xa0,0x2a},{modifierCtrl,0x
 }
 bool Stream::start(const Session& s,const char* device) {
  if(validateSettings(s.settings)!=SettingsError::none){stop();fail("Invalid stream settings");return false;}
+ if((s.audioChannels!=2&&s.audioChannels!=6&&s.audioChannels!=8)||audio::requestedChannels(s.settings.audio_mode,s.audioChannels)!=s.audioChannels){stop();fail("Invalid audio channel request");return false;}
  qos_={};nextQos_=0;qosRequested_=false;
  stop();opennow_media_note("START " OPENNOW_VERSION);entropyFailed=false;session_=s;settings_=s.settings;name_=std::string("opennow-")+device;peerId_=ack_=0;remoteId_=1;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;keyHeld_=false;mouseHeld_=0;keyUpAt_=nextKeyAt_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
  capture_.arm(OPENNOW_STORAGE_ROOT,settings_.codec()==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){fail("Invalid secure signaling endpoint");release();return false;}
- if(!media_.start(settings_)){fail("Could not initialize video decoder / audio output");release();return false;}
+ if(!media_.start(settings_,s.audioChannels)){fail("Could not initialize video decoder / audio output");release();return false;}
  if(peer_init()!=0){fail("WebRTC runtime initialization failed");release();return false;}runtimeReady_=true;
  PeerConfiguration config{};config.video_codec=settings_.codec()==VideoCodec::hevc?CODEC_HEVC:CODEC_H264;config.audio_codec=CODEC_OPUS;config.datachannel=DATA_CHANNEL_STRING;config.user_data=this;config.onvideopacket=video;config.onaudiopacket=audio;
  config.ice_servers[0].urls="stun:s1.stun.gamestream.nvidia.com:19308";
@@ -76,6 +77,7 @@ void Stream::release() {
  if(ws_){ws_->disconnect();delete ws_;ws_=nullptr;}
  if(runtimeReady_){peer_deinit();runtimeReady_=false;}
  media_.stop();secureErase(&session_,sizeof(session_));session_={};inputReady_=false;answerSent_=false;candidates_.clear();candidateMid_.clear();candidateMLine_=0;previousInput_={};
+ heldModifiers_=0;keyHeld_=false;pendingInputValid_=releasingInputs_=releasingKey_=cursorWanted_=false;pendingInput_={};nextCursorCapture_=0;
 }
 void Stream::send(cJSON* root){char* value=cJSON_PrintUnformatted(root);if(value&&ws_)ws_->send_message(value);cJSON_free(value);}
 void Stream::payload(cJSON* value){if(!ws_)return;char* data=cJSON_PrintUnformatted(value);if(!data)return;auto* root=cJSON_CreateObject();auto* msg=cJSON_AddObjectToObject(root,"peer_msg");cJSON_AddNumberToObject(msg,"from",peerId_);cJSON_AddNumberToObject(msg,"to",remoteId_);cJSON_AddStringToObject(msg,"msg",data);cJSON_AddNumberToObject(root,"ackid",++ack_);send(root);cJSON_Delete(root);cJSON_free(data);}
@@ -97,9 +99,13 @@ void Stream::message(const std::string& message) {
   if(!std::strcmp(text(data,"type"),"offer")){
    std::string offer=sdp::PrepareGfnOfferSdp(text(data,"sdp"),session_.signaling,session_.mediaIp,session_.mediaPort);
    if(offer.size()<60000&&!offer.empty()){
+    const auto audioFormat=audio::selectFormat(offer,std::min(session_.audioChannels,media_.audioCapacity()));
+    if(!audio::validFormat(audioFormat)){fail("Server did not offer supported audio");}else{
     mediaSdp("OFFER",offer);peer_connection_set_remote_description(pc_,offer.c_str(),SDP_TYPE_OFFER);
-    const char* raw=peer_connection_create_answer(pc_);
-    if(raw&&!entropyFailed){auto answer=sdp::AdaptAnswerSdpToOffer(raw,offer,settings_);if(answer.empty()){fail("Server did not offer the selected video codec");}else{mediaSdp("ANSWER",answer);auto nvst=webrtc::BuildNvstSdp(answer,settings_,sdp::ParseRiInputCapabilities(offer));auto* a=cJSON_CreateObject();cJSON_AddStringToObject(a,"type","answer");cJSON_AddStringToObject(a,"sdp",answer.c_str());cJSON_AddStringToObject(a,"nvstSdp",nvst.c_str());payload(a);cJSON_Delete(a);answerSent_=true;
+    const bool audioReady=peer_connection_set_audio_payload_types(pc_,audioFormat.payload,audioFormat.redPayload)==0&&media_.configureAudio(audioFormat);
+    const char* raw=audioReady?peer_connection_create_answer(pc_):nullptr;
+    if(!audioReady){fail("Could not configure offered audio");}
+    else if(raw&&!entropyFailed){auto answer=sdp::AdaptAnswerSdpToOffer(raw,offer,settings_,&audioFormat);if(answer.empty()){fail("Server did not offer the selected video codec");}else{mediaSdp("ANSWER",answer);auto nvst=webrtc::BuildNvstSdp(answer,settings_,sdp::ParseRiInputCapabilities(offer));auto* a=cJSON_CreateObject();cJSON_AddStringToObject(a,"type","answer");cJSON_AddStringToObject(a,"sdp",answer.c_str());cJSON_AddStringToObject(a,"nvstSdp",nvst.c_str());payload(a);cJSON_Delete(a);answerSent_=true;
      const auto bundle=sdp::ExtractSdpValue(answer,"a=group:BUNDLE ");
      candidateMid_=bundle.empty()?sdp::ExtractSdpValue(answer,"a=mid:"):bundle.substr(0,bundle.find(' '));
      int section=-1;
@@ -108,6 +114,7 @@ void Stream::message(const std::string& message) {
      int pairs=0;if(peer_connection_get_ice_candidate_pair_stats(pc_,&pairs,nullptr,nullptr,nullptr,nullptr)==0&&pairs==0){auto manual=sdp::BuildManualMediaCandidate(session_.signaling,session_.mediaIp,session_.mediaPort,100);if(!manual.empty())peer_connection_add_ice_candidate(pc_,manual.data());}
      std::snprintf(status_,sizeof(status_),"Negotiating secure media connection");
     }}else{fail(entropyFailed?"Secure entropy failed":"Unable to create WebRTC answer");}
+    }
    }else{fail("Invalid server stream offer");}
   }else if(*text(data,"candidate")){auto candidate=sdp::RewriteGfnMediaCandidate(text(data,"candidate"),session_.mediaIp,session_.mediaPort,session_.signaling);if(candidate.rfind("a=",0))candidate="a="+candidate;if(candidate.size()<2048)peer_connection_add_ice_candidate(pc_,candidate.data());}
   cJSON_Delete(data);
@@ -139,6 +146,10 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
  if(inputReady_&&!qosRequested_){
   if(peer_connection_create_datachannel_sid(pc_,DATA_CHANNEL_PARTIAL_RELIABLE_TIMED_UNORDERED,0,300,const_cast<char*>("control_channel_partially_reliable"),const_cast<char*>(""),6)>=0){qosRequested_=true;opennow_media_note("NVST QoS control requested sid=6 lifetime=300");}
  }
+ if(cursorWanted_&&inputReady_&&peer_connection_datachannel_is_open(pc_,6)&&now>=nextCursorCapture_){
+  char cursor[]={8,3,1,0,1};
+  if(peer_connection_datachannel_send_binary_sid(pc_,cursor,sizeof(cursor),6)>=0)nextCursorCapture_=now+1000000;
+ }
  if(peer_connection_datachannel_is_open(pc_,6)&&now>=nextQos_){
   PeerVideoRtpStats stats{};peer_connection_get_video_rtp_stats(pc_,&stats);
   const auto sample=qos_.next(stats.latest_rtp_timestamp);auto bytes=qos_.packet(sample,now-started_>=1900000);
@@ -159,6 +170,8 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
    std::snprintf(diagnostic,sizeof(diagnostic),"ASSEMBLER ready=%d lastResult=%d",stats.assembler_ready,stats.last_video_result);opennow_media_note(diagnostic);
    std::snprintf(diagnostic,sizeof(diagnostic),"AUDIO recovered=%u concealed=%u underruns=%u / TARGET %dx%d %d FPS %d kbps",
     media_.audioRecovered.load(),media_.audioConcealed.load(),media_.audioUnderruns.load(),settings_.width,settings_.height,settings_.fps,settings_.bitrate_kbps);opennow_media_note(diagnostic);
+   std::snprintf(diagnostic,sizeof(diagnostic),"AUDIO requested=%u decoded=%u apiOutput=%u bytes=%u samples=%u queue=%u dropped=%u fecAttempts=%u stereoFallbacks=%u",
+    session_.audioChannels,media_.audioChannels.load(),media_.audioCapacity(),media_.audioBytes.load(),media_.audioSamples.load(),media_.audioQueueFrames.load(),media_.audioDroppedFrames.load(),media_.audioFecAttempts.load(),media_.audioStereoFallbacks.load());opennow_media_note(diagnostic);
    std::string types="PT";for(unsigned pt=0;pt<128;++pt)if(stats.payload_counts[pt]){char item[32];std::snprintf(item,sizeof(item)," %u=%u",pt,stats.payload_counts[pt]);types+=item;}opennow_media_note(types.c_str());
    std::snprintf(status_,sizeof(status_),"VIDEO RTP %u AU %u LOST %u / DECODE %u ERR %d / AUDIO %u ERR %u",
     stats.packets_received,stats.access_units_completed,stats.access_units_dropped,media_.frames.load(),media_.decodeError.load(),media_.audioPackets.load(),media_.audioErrors.load());
@@ -172,6 +185,8 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
     const auto t=media_.nativeTiming();
     std::fprintf(live,"target_fps=%d target_hdr=%d codec=%d native_copy_us=%llu native_publish_us=%llu native_decode_us=%llu native_flush_us=%llu native_decode_calls=%llu native_flush_calls=%llu native_blocked_attempts=%llu native_worker_mask=%llu native_pipeline_depth=%u native_inflight=%u\n",
      settings_.fps,settings_.hdr(),static_cast<int>(settings_.codec()),static_cast<unsigned long long>(t.copy_us),static_cast<unsigned long long>(t.publish_us),static_cast<unsigned long long>(t.decode_us),static_cast<unsigned long long>(t.flush_us),static_cast<unsigned long long>(t.decode_calls),static_cast<unsigned long long>(t.flush_calls),static_cast<unsigned long long>(t.blocked_attempts),static_cast<unsigned long long>(t.worker_mask),t.pipeline_depth,t.in_flight);
+    std::fprintf(live,"audio_requested_channels=%u audio_channels=%u audio_api_output=%u audio_bytes=%u audio_samples=%u audio_queue_frames=%u audio_queue_peak=%u audio_dropped_frames=%u audio_output_errors=%u audio_recovered=%u audio_concealed=%u audio_underruns=%u audio_fec_attempts=%u audio_stereo_fallbacks=%u\n",
+     session_.audioChannels,media_.audioChannels.load(),media_.audioCapacity(),media_.audioBytes.load(),media_.audioSamples.load(),media_.audioQueueFrames.load(),media_.audioQueuePeak.load(),media_.audioDroppedFrames.load(),media_.audioOutputErrors.load(),media_.audioRecovered.load(),media_.audioConcealed.load(),media_.audioUnderruns.load(),media_.audioFecAttempts.load(),media_.audioStereoFallbacks.load());
     std::fclose(live);
    }
    if(!media_.frames&&now-keyframeRequested_>=2000000){peer_connection_request_video_keyframe(pc_);keyframeRequested_=now;}
@@ -200,36 +215,67 @@ void Stream::input(const PS5_PadData& pad,std::uint64_t now){if(!inputReady_||!p
  if(protocol_>2){std::vector<std::uint8_t> wire{0x23};be(wire,now,8);wire.push_back(0x21);be(wire,data.size(),2);wire.insert(wire.end(),data.begin(),data.end());data=std::move(wire);}
  peer_connection_datachannel_send_binary_sid(pc_,reinterpret_cast<char*>(data.data()),data.size(),0);
 }
-void Stream::sendInput(const wire::Bytes& bytes){peer_connection_datachannel_send_binary_sid(pc_,reinterpret_cast<char*>(const_cast<std::uint8_t*>(bytes.data())),bytes.size(),0);}
-void Stream::releaseKey(std::uint64_t now){
- if(!keyHeld_)return;
- auto modifiers=heldKey_.modifiers;
- sendInput(wire::key(false,heldKey_.vk,heldKey_.scan,modifiers,protocol_,now));
- for(auto i=std::size(modifierKeys);i--;)if(const auto& m=modifierKeys[i];modifiers&m.bit){modifiers&=~m.bit;sendInput(wire::key(false,m.vk,m.scan,modifiers,protocol_,now));}
- keyHeld_=false;
+bool Stream::sendInput(const wire::Bytes& bytes){return pc_&&inputReady_&&peer_connection_datachannel_send_binary_sid(pc_,reinterpret_cast<char*>(const_cast<std::uint8_t*>(bytes.data())),bytes.size(),0)>=0;}
+bool Stream::releaseKey(std::uint64_t now){
+ if(keyHeld_){
+  if(!sendInput(wire::key(false,heldKey_.vk,heldKey_.scan,heldModifiers_,protocol_,now)))return false;
+  keyHeld_=false;
+ }
+ for(auto i=std::size(modifierKeys);i--;)if(const auto& m=modifierKeys[i];heldModifiers_&m.bit){
+  const auto next=static_cast<std::uint8_t>(heldModifiers_&~m.bit);
+  if(!sendInput(wire::key(false,m.vk,m.scan,next,protocol_,now)))return false;
+  heldModifiers_=next;
+ }
+ return true;
 }
 void Stream::events(InputQueue& queue,std::uint64_t now){
  if(!inputReady_||!pc_){queue.cancel();return;}
- if(keyHeld_&&now>=keyUpAt_){releaseKey(now);nextKeyAt_=now+32000;}
- InputEvent e;
- while(queue.take(e,!keyHeld_&&now>=nextKeyAt_)){
-  if(e.kind==InputEvent::Kind::cancel){
-   if(keyHeld_){releaseKey(now);nextKeyAt_=now+32000;}
-   for(std::uint8_t b=1;b<=5;++b)if(mouseHeld_&(1U<<b))sendInput(wire::mouseButton(false,b,protocol_,now));
-   mouseHeld_=0;
-  } else if(e.kind==InputEvent::Kind::move){
-   while(e.dx||e.dy){const int x=std::clamp(e.dx,-32768,32767),y=std::clamp(e.dy,-32768,32767);sendInput(wire::mouseMove(static_cast<std::int16_t>(x),static_cast<std::int16_t>(y),protocol_,now));e.dx-=x;e.dy-=y;}
-  } else if(e.kind==InputEvent::Kind::button){
-   if(e.button<1||e.button>5)continue;
-   const unsigned bit=1U<<e.button;
-   if(e.down==((mouseHeld_&bit)!=0))continue;
-   sendInput(wire::mouseButton(e.down,e.button,protocol_,now));mouseHeld_^=bit;
-  } else {
-   heldKey_=e.key;keyHeld_=true;keyUpAt_=now+32000;
-   std::uint8_t modifiers=0;
-   for(const auto& m:modifierKeys)if(e.key.modifiers&m.bit){modifiers|=m.bit;sendInput(wire::key(true,m.vk,m.scan,modifiers,protocol_,now));}
-   sendInput(wire::key(true,e.key.vk,e.key.scan,modifiers,protocol_,now));
+ for(;;){
+  if(queue.takeCancel()){pendingInputValid_=false;releasingInputs_=true;}
+  if(keyHeld_&&now>=keyUpAt_)releasingKey_=true;
+  if(releasingInputs_||releasingKey_){
+   const bool held=keyHeld_||heldModifiers_;
+   if(!releaseKey(now))return;
+   if(held)nextKeyAt_=now+32000;
+   releasingKey_=false;
+   if(releasingInputs_){
+    for(std::uint8_t b=1;b<=5;++b)if(mouseHeld_&(1U<<b)){
+     if(!sendInput(wire::mouseButton(false,b,protocol_,now)))return;
+     mouseHeld_&=static_cast<std::uint8_t>(~(1U<<b));
+    }
+    releasingInputs_=false;
+   }
   }
+  if(!pendingInputValid_){
+   if(!queue.take(pendingInput_,!keyHeld_&&now>=nextKeyAt_))return;
+   pendingInputValid_=true;
+  }
+  auto& e=pendingInput_;
+  if(e.kind==InputEvent::Kind::cancel){pendingInputValid_=false;releasingInputs_=true;continue;}
+  cursorWanted_=true;
+  if(e.kind==InputEvent::Kind::move){
+   while(e.dx||e.dy){const int x=std::clamp(e.dx,-32768,32767),y=std::clamp(e.dy,-32768,32767);if(!sendInput(wire::mouseMove(static_cast<std::int16_t>(x),static_cast<std::int16_t>(y),protocol_,now)))return;e.dx-=x;e.dy-=y;}
+  } else if(e.kind==InputEvent::Kind::wheel){
+   if(!sendInput(wire::mouseWheel(static_cast<std::int16_t>(e.dx),static_cast<std::int16_t>(e.dy),protocol_,now)))return;
+  } else if(e.kind==InputEvent::Kind::button){
+   if(e.button>=1&&e.button<=5){
+    const unsigned bit=1U<<e.button;
+    if(e.down!=((mouseHeld_&bit)!=0)){
+     if(!sendInput(wire::mouseButton(e.down,e.button,protocol_,now)))return;
+     mouseHeld_^=bit;
+    }
+   }
+  } else {
+   heldKey_=e.key;
+   for(const auto& m:modifierKeys)if((e.key.modifiers&m.bit)&&!(heldModifiers_&m.bit)){
+    const auto next=static_cast<std::uint8_t>(heldModifiers_|m.bit);
+    if(!sendInput(wire::key(true,m.vk,m.scan,next,protocol_,now)))return;
+    heldModifiers_=next;
+   }
+   if(!sendInput(wire::key(true,e.key.vk,e.key.scan,heldModifiers_,protocol_,now)))return;
+   keyHeld_=true;keyUpAt_=now+32000;
+  }
+  pendingInputValid_=false;
  }
 }
 }

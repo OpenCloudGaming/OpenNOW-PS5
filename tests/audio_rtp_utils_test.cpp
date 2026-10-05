@@ -70,5 +70,10 @@ int main() {
     assert(!ParseRedPrimary(wrong_codec,sizeof(wrong_codec),63).data);
     const uint8_t wrong_primary[]={110,0x11};
     assert(!ParseRedPrimary(wrong_primary,sizeof(wrong_primary),63).data);
+    const uint8_t dynamic[]={0x80|107,15,0,2,107,0xaa,0xbb,0x11};
+    assert(ParseRedPrimary(dynamic,sizeof(dynamic),108,107,108).size==1);
+    assert(ParseLatestRedundant(dynamic,sizeof(dynamic),107).timestamp_offset==960);
+    assert(!ParseRedPrimary(dynamic,sizeof(dynamic),109,107,108).data);
+    assert(!ParseRedPrimary(dynamic,sizeof(dynamic),108,107,-1).data);
     return 0;
 }

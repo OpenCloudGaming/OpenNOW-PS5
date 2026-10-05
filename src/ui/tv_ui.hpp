@@ -43,6 +43,12 @@ struct SettingsInfo {
     unsigned revision=0;
 };
 
+struct AudioInfo {
+    unsigned capacity=2, requested=0, negotiated=0;
+    bool fallback=false;
+    bool operator==(const AudioInfo&) const=default;
+};
+
 struct Model {
     Screen screen;
     Section section;
@@ -79,6 +85,9 @@ struct Model {
     bool confirmClear;
     const StreamSettings& proposal;
     bool confirmFixed;
+    AudioInfo audio;
 };
 void render(ps5::demo::Canvas& canvas, const Model& model) noexcept;
+struct Overlay { const StreamKeyboard& keyboard; bool launcher; unsigned speed; bool inputReady; };
+void renderOverlay(ps5::demo::Canvas& canvas, const Overlay& overlay) noexcept;
 }

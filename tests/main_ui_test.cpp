@@ -8,11 +8,14 @@
 #include <filesystem>
 #include <vector>
 
-namespace { unsigned testButtons=0; bool testConnected=true; PS5_PadTouchData testTouch{}; }
+namespace { unsigned testButtons=0; bool testConnected=true; PS5_PadTouchData testTouch{};
+decltype(PS5_PadData::rightStick) testRightStick{128,128}; decltype(PS5_PadData::analogButtons) testTriggers{}; }
 extern "C" {
 int sceUserServiceGetInitialUser(int* user) {*user=0;return 0;}
 int scePadOpen(int,int,int,void*) {return 1;}
-int scePadReadState(int,PS5_PadData* data) {data->connected=testConnected;data->buttons=testButtons;data->touch=testTouch;return 0;}
+int scePadReadState(int,PS5_PadData* data) {data->connected=testConnected;data->buttons=testButtons;data->touch=testTouch;data->leftStick={128,128};data->rightStick=testRightStick;data->analogButtons=testTriggers;return 0;}
+unsigned long long testNow=1000000;
+unsigned long long sceKernelGetProcessTime() {testNow+=16000;return testNow;}
 }
 opennow::Http::Http() noexcept=default;
 opennow::Http::~Http()=default;
@@ -303,8 +306,40 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     assert(section==Section::settings&&current()==Screen::settings&&!settingsContent);
     press(PS5_PAD_BUTTON_R1);assert(section==Section::settings);
     press(PS5_PAD_BUTTON_DOWN);assert(settingsPane==SettingsPane::display);
-    press(PS5_PAD_BUTTON_RIGHT);press(PS5_PAD_BUTTON_CROSS);assert(!settingsContent);
-    press(PS5_PAD_BUTTON_UP);press(PS5_PAD_BUTTON_UP);assert(settingsPane==SettingsPane::stream);
+    {
+        using opennow::audio::Mode;
+        Request request;
+        const auto quality=opennow::settingsFor(StreamProfile::quality);
+        assert(draft==quality&&draft.audio_mode==Mode::stereo);
+        press(PS5_PAD_BUTTON_RIGHT);assert(settingsContent&&settingsRow==0);
+        press(PS5_PAD_BUTTON_DOWN);assert(settingsRow==0);
+        press(PS5_PAD_BUTTON_RIGHT);assert(draft.audio_mode==Mode::surround51&&command.load()==0&&publishedDefaults.audio_mode==Mode::stereo);
+        press(PS5_PAD_BUTTON_RIGHT);press(PS5_PAD_BUTTON_RIGHT);assert(draft.audio_mode==Mode::surround71);
+        press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_LEFT);
+        assert(draft.audio_mode==Mode::automatic&&settingsContent);
+        assert(opennow::ui::changedRows(draft,publishedDefaults)==opennow::ui::audioBit);
+        press(PS5_PAD_BUTTON_SQUARE);assert(draft==quality);
+        press(PS5_PAD_BUTTON_OPTIONS);assert(command.load()==0);
+        press(PS5_PAD_BUTTON_RIGHT);press(PS5_PAD_BUTTON_RIGHT);assert(draft.audio_mode==Mode::surround71);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent&&draft.audio_mode==Mode::surround71);
+        press(PS5_PAD_BUTTON_UP);press(PS5_PAD_BUTTON_RIGHT);
+        press(PS5_PAD_BUTTON_RIGHT);
+        assert(draft.audio_mode==Mode::surround71&&draft.fps==opennow::settingsFor(StreamProfile::smooth).fps&&opennow::ui::rowCount(opennow::ui::changedRows(draft,publishedDefaults))>1);
+        press(PS5_PAD_BUTTON_CIRCLE);press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_RIGHT);
+        press(PS5_PAD_BUTTON_OPTIONS);
+        assert(take(request)==16&&request.hasSettings&&request.settings.audio_mode==Mode::surround71&&request.settings.fps==draft.fps&&request.settings==draft);
+        publishedDefaults=request.settings;++publishedSettings.revision;testButtons=0;draw(canvas);
+        assert(draft==request.settings&&!opennow::ui::changedRows(draft,publishedDefaults));
+        artworkWanted=true;
+        press(PS5_PAD_BUTTON_CIRCLE);press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_RIGHT);press(PS5_PAD_BUTTON_LEFT);
+        assert(!artworkWanted&&command.load()==0);
+        press(PS5_PAD_BUTTON_CROSS);assert(artworkWanted);
+        press(PS5_PAD_BUTTON_CIRCLE);press(PS5_PAD_BUTTON_UP);
+        assert(opennow::ui::presetFor(StreamProfile::compatibility,draft).audio_mode==Mode::surround71);
+        publishedDefaults=quality;++publishedSettings.revision;testButtons=0;draw(canvas);
+        assert(draft==quality&&settingsPane==SettingsPane::display&&!settingsContent);
+    }
+    press(PS5_PAD_BUTTON_UP);assert(settingsPane==SettingsPane::stream);
     press(PS5_PAD_BUTTON_RIGHT);assert(settingsContent&&settingsRow==0);
     {
         using opennow::ui::StreamRow;
@@ -663,6 +698,81 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
         publishedStream=true;
         testButtons=PS5_PAD_BUTTON_TRIANGLE;draw(canvas);
         assert(!keyboard.open&&publishedPad.buttons==PS5_PAD_BUTTON_TRIANGLE);
+        testButtons=0;draw(canvas);drain();
+        const auto only=[&](InputEvent::Kind kind){unsigned n=0;InputEvent x;while(inputQueue.take(x,true)){assert(x.kind==kind||x.kind==InputEvent::Kind::move);if(x.kind==kind){e=x;++n;}}return n;};
+        press(PS5_PAD_BUTTON_R3);assert(!launcher.active&&publishedPad.buttons==PS5_PAD_BUTTON_R3);
+        press(PS5_PAD_BUTTON_OPTIONS);
+        testButtons=PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_R3;draw(canvas);
+        assert(launcher.active&&!keyboard.open&&cancelled()&&publishedPad.connected&&publishedPad.buttons==0);
+        assert(publishedPad.rightStick.x==128&&publishedPad.leftStick.y==128);
+        testButtons=0;draw(canvas);assert(publishedPad.buttons==0);
+        testRightStick={255,128};draw(canvas);
+        {InputEvent x;assert(inputQueue.take(x,true)&&x.kind==InputEvent::Kind::move&&x.dx>=10&&x.dy==0);}
+        assert(publishedPad.rightStick.x==128&&publishedPad.buttons==0);
+        testRightStick={128,128};
+        testButtons=PS5_PAD_BUTTON_R2;draw(canvas);
+        assert(inputQueue.take(e,true)&&e.kind==InputEvent::Kind::button&&e.button==1&&e.down&&publishedPad.buttons==0);
+        testTouch.fingers=1;testTouch.touch[0]={300,300,4,{}};
+        testButtons=PS5_PAD_BUTTON_R2|PS5_PAD_BUTTON_TOUCH_PAD;draw(canvas);
+        assert(!inputQueue.size());
+        testButtons=PS5_PAD_BUTTON_TOUCH_PAD;draw(canvas);
+        assert(!inputQueue.size());
+        testButtons=0;draw(canvas);
+        assert(inputQueue.take(e,true)&&e.button==1&&!e.down&&!inputQueue.size());
+        testTouch={};
+        testTriggers={60,0};draw(canvas);
+        assert(inputQueue.take(e,true)&&e.button==3&&e.down);
+        testTriggers={};draw(canvas);
+        assert(inputQueue.take(e,true)&&e.button==3&&!e.down);
+        testButtons=PS5_PAD_BUTTON_UP;draw(canvas);
+        assert(only(InputEvent::Kind::wheel)==1&&e.dy==120&&e.dx==0);
+        for(unsigned i=0;i<8;++i)draw(canvas);
+        assert(only(InputEvent::Kind::wheel)==0);
+        draw(canvas);draw(canvas);
+        assert(only(InputEvent::Kind::wheel)==1&&e.dy==120);
+        testButtons=0;draw(canvas);
+        assert(launcher.speed==1);press(PS5_PAD_BUTTON_SQUARE);assert(launcher.speed==2&&publishedPad.buttons==0&&!inputQueue.size());
+        press(PS5_PAD_BUTTON_OPTIONS);
+        testButtons=PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_SQUARE;draw(canvas);
+        assert(publishedPad.buttons==PS5_PAD_BUTTON_TOUCH_PAD&&launcher.active&&launcher.speed==2);
+        testButtons=0;draw(canvas);assert(publishedPad.buttons==0);
+        press(PS5_PAD_BUTTON_TRIANGLE);
+        assert(keyboard.open&&launcher.active&&cancelled()&&!publishedPad.connected);
+        testRightStick={255,128};testButtons=PS5_PAD_BUTTON_R2;draw(canvas);
+        assert(!inputQueue.size());
+        testRightStick={128,128};testButtons=0;draw(canvas);
+        press(PS5_PAD_BUTTON_CROSS);
+        assert(inputQueue.take(e,true)&&e.kind==InputEvent::Kind::key);
+        press(PS5_PAD_BUTTON_CIRCLE);
+        assert(!keyboard.open&&launcher.active&&cancelled()&&publishedPad.connected&&publishedPad.buttons==0);
+        testButtons=PS5_PAD_BUTTON_R2;draw(canvas);
+        assert(inputQueue.take(e,true)&&e.button==1&&e.down);
+        testButtons=PS5_PAD_BUTTON_R2|PS5_PAD_BUTTON_OPTIONS;draw(canvas);
+        testButtons=PS5_PAD_BUTTON_R2|PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_R3;draw(canvas);
+        assert(!launcher.active&&cancelled()&&!inputQueue.size()&&publishedPad.buttons==0);
+        testButtons=PS5_PAD_BUTTON_R2;draw(canvas);
+        assert(publishedPad.buttons==0&&!inputQueue.size());
+        testButtons=0;draw(canvas);
+        press(PS5_PAD_BUTTON_R2);assert(publishedPad.buttons==PS5_PAD_BUTTON_R2&&!inputQueue.size());
+        press(PS5_PAD_BUTTON_OPTIONS);
+        testButtons=PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_R3;draw(canvas);
+        assert(launcher.active&&cancelled());
+        publishedInputReady=false;
+        testButtons=PS5_PAD_BUTTON_R2;testRightStick={255,128};draw(canvas);
+        assert(!inputQueue.size());
+        publishedInputReady=true;testButtons=0;testRightStick={128,128};draw(canvas);drain();
+        testConnected=false;draw(canvas);
+        assert(!launcher.active&&cancelled());
+        testConnected=true;testButtons=0;draw(canvas);
+        press(PS5_PAD_BUTTON_OPTIONS);
+        testButtons=PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_R3;draw(canvas);
+        assert(launcher.active&&cancelled());
+        press(PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_TOUCH_PAD);
+        assert(take()==2&&http.cancelled&&!inputQueue.size());
+        http.cancelled=false;
+        publishedStream=false;testButtons=0;draw(canvas);
+        assert(!launcher.active&&cancelled());
+        publishedStream=true;draw(canvas);
     }
     press(PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_TOUCH_PAD);
     assert(take()==2&&http.cancelled);

@@ -5,6 +5,7 @@ extern "C" {
 int sceUserServiceGetInitialUser(int*) {return -1;}
 int scePadOpen(int,int,int,void*) {return -1;}
 int scePadReadState(int,PS5_PadData*) {return -1;}
+unsigned long long sceKernelGetProcessTime() {return 1000000;}
 }
 namespace opennow::gpu {
 bool settingsAvailable(const StreamSettings& settings) noexcept {

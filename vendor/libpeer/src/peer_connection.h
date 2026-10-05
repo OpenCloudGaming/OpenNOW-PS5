@@ -232,6 +232,8 @@ int peer_connection_get_ice_candidate_pair_stats(PeerConnection* pc,
 
 int peer_connection_get_rtt_ms(PeerConnection* pc);
 
+int peer_connection_set_audio_payload_types(PeerConnection* pc, int opus, int red);
+
 #ifdef __cplusplus
 }
 #endif

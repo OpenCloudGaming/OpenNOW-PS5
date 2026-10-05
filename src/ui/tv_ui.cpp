@@ -80,7 +80,7 @@ Color storeAccent(string_view store) {
     return rgb(0x45525E);
 }
 
-enum class Glyph { cross, circle, square, triangle, dpad, options, touch, check };
+enum class Glyph { cross, circle, square, triangle, dpad, options, touch, check, stick };
 void glyph(Canvas& c, Glyph kind, float cx, float cy, Color color, float size=26) {
     const float s=size/24, x=cx-12*s, y=cy-12*s, t=2.6f*s;
     switch(kind) {
@@ -100,6 +100,7 @@ void glyph(Canvas& c, Glyph kind, float cx, float cy, Color color, float size=26
     }
     case Glyph::options: for(float row:{7.0f,12.0f,17.0f})c.line(x+5*s,y+row*s,x+19*s,y+row*s,2.4f*s,color);break;
     case Glyph::touch: c.roundRectStroke(cx-15,cy-8,30,16,5,2.4f,color);break;
+    case Glyph::stick: c.ring(cx,cy,8.5f*s,t,color);c.disc(cx,cy,3*s,color);break;
     case Glyph::check: c.line(x+5*s,y+12.5f*s,x+9.5f*s,y+17*s,3*s,color);c.line(x+9.5f*s,y+17*s,x+19*s,y+7.5f*s,3*s,color);break;
     }
 }
@@ -131,20 +132,20 @@ float hintWidth(const Hint& h) {
     }
     return text;
 }
-void drawHint(Canvas& c, const Hint& h, float x) {
+void drawHint(Canvas& c, const Hint& h, float x, float cy=hintY) {
     switch(h.kind) {
-    case HintKind::glyph: x+=well(c,h.icon,x,hintY)+12;break;
-    case HintKind::pill: x+=pill(c,h.key,x,hintY)+12;break;
-    case HintKind::optionsMint: x+=optionsPill(c,x,hintY,mint,mintInk)+12;break;
+    case HintKind::glyph: x+=well(c,h.icon,x,cy)+12;break;
+    case HintKind::pill: x+=pill(c,h.key,x,cy)+12;break;
+    case HintKind::optionsMint: x+=optionsPill(c,x,cy,mint,mintInk)+12;break;
     case HintKind::chord:
-        x+=pill(c,"L1",x,hintY)+8;x+=pill(c,"R1",x,hintY)+12;break;
+        x+=pill(c,"L1",x,cy)+8;x+=pill(c,"R1",x,cy)+12;break;
     case HintKind::hold:
-        x+=label(c,Face::bold,22,x,hintY,"Hold",muted)+10;x+=optionsPill(c,x,hintY)+10;
-        x+=label(c,Face::black,20,x,hintY,"+",dim)+10;x+=touchPill(c,x,hintY)+12;break;
+        x+=label(c,Face::bold,22,x,cy,"Hold",muted)+10;x+=optionsPill(c,x,cy)+10;
+        x+=label(c,Face::black,20,x,cy,"+",dim)+10;x+=touchPill(c,x,cy)+12;break;
     case HintKind::combo:
-        x+=optionsPill(c,x,hintY)+10;x+=label(c,Face::black,20,x,hintY,"+",dim)+10;x+=well(c,h.icon,x,hintY)+12;break;
+        x+=optionsPill(c,x,cy)+10;x+=label(c,Face::black,20,x,cy,"+",dim)+10;x+=well(c,h.icon,x,cy)+12;break;
     }
-    label(c,Face::bold,hintLabel,x,hintY,h.text,ink);
+    label(c,Face::bold,hintLabel,x,cy,h.text,ink);
 }
 void hints(Canvas& c, const Hint* leftHints, unsigned leftCount, const Hint* rightHints, unsigned rightCount) {
     float x=left;
@@ -173,7 +174,7 @@ string_view profileName(StreamProfile p, char* buffer, std::size_t size) {
 }
 string_view settingsName(const StreamSettings& s, char* buffer, std::size_t size) {
     for(unsigned i=0;i<static_cast<unsigned>(StreamProfile::count);++i)
-        if(settingsFor(static_cast<StreamProfile>(i))==s)return profileName(static_cast<StreamProfile>(i),buffer,size);
+        if(presetFor(static_cast<StreamProfile>(i),s)==s)return profileName(static_cast<StreamProfile>(i),buffer,size);
     if(s.height>=2160)std::snprintf(buffer,size,"Custom 4K%d %s",s.fps,s.hdr()?"HDR":"SDR");
     else std::snprintf(buffer,size,"Custom %dp%d%s",s.height,s.fps,s.hdr()?" HDR":"");
     return buffer;
@@ -600,6 +601,30 @@ void progress(Canvas& c, const Model& m) {
     hints(c,l,m.streaming?3:0,r,1);
 }
 
+void keyGrid(Canvas& c, const StreamKeyboard& k, bool ready, float x0, float y0, float span, float keyH, float rowPitch, Color keyColor) {
+    const float pitch=span/StreamKeyboard::units, big=keyH*0.43f, small=keyH*0.31f;
+    for(unsigned i=0;i<StreamKeyboard::count;++i) {
+        const auto& key=StreamKeyboard::keys[i];
+        const float x=x0+StreamKeyboard::column(i)*pitch, y=y0+StreamKeyboard::row(i)*rowPitch, w=key.width*pitch-12;
+        const bool focused=i==k.selected, latched=k.latched(i);
+        if(focused)c.roundRectStroke(x-9,y-9,w+18,keyH+18,25,4,mint);
+        c.roundRect(x,y,w,keyH,16,focused?mint:latched?mix(keyColor,mint,0.24f):keyColor);
+        const Color color=focused?mintInk:latched?mint:ready?ink:dim;
+        const float cy=y+keyH/2;
+        if(key.vk>=0x25&&key.vk<=0x28) {
+            const float cx=x+w/2, a=keyH*0.15f, dx=key.vk==0x25?-1.0f:key.vk==0x27?1.0f:0.0f, dy=key.vk==0x26?-1.0f:key.vk==0x28?1.0f:0.0f;
+            c.line(cx-dx*a,cy-dy*a,cx+dx*a,cy+dy*a,4,color);
+            c.line(cx+dx*a,cy+dy*a,cx+dx*a*0.25f-dy*a*0.75f,cy+dy*a*0.25f+dx*a*0.75f,4,color);
+            c.line(cx+dx*a,cy+dy*a,cx+dx*a*0.25f+dy*a*0.75f,cy+dy*a*0.25f-dx*a*0.75f,4,color);
+            continue;
+        }
+        const char* name=k.label(i);
+        const bool word=name[1]!=0;
+        const Face face=word?Face::bold:Face::extrabold;
+        const float size=word?small:big, kw=textWidth(face,size,name);
+        label(c,face,size,x+w/2-kw/2,cy,name,color);
+    }
+}
 void streamKeyboard(Canvas& c, const Model& m) {
     const auto& k=m.keyboard;
     char tag[192];
@@ -616,27 +641,7 @@ void streamKeyboard(Canvas& c, const Model& m) {
     const float stateW=labelRight(c,Face::extrabold,22,right-36,300,state,at?mint:dim,0.14f);
     drawFitted(c,Face::black,56,left+36,baselineIn(Face::black,56,300-40,80),m.inputReady?"Keys go straight to your game":"Waiting for game input",
         width-72-stateW-48,m.inputReady?muted:amber,-0.01f);
-    const float pitch=width/StreamKeyboard::units;
-    for(unsigned i=0;i<StreamKeyboard::count;++i) {
-        const auto& key=StreamKeyboard::keys[i];
-        const float x=left+StreamKeyboard::column(i)*pitch, y=396+StreamKeyboard::row(i)*96.0f, w=key.width*pitch-12;
-        const bool focused=i==k.selected, latched=k.latched(i);
-        if(focused)c.roundRectStroke(x-9,y-9,w+18,102,25,4,mint);
-        c.roundRect(x,y,w,84,16,focused?mint:latched?mix(surface,mint,0.24f):surface);
-        const Color color=focused?mintInk:latched?mint:m.inputReady?ink:dim;
-        if(key.vk>=0x25&&key.vk<=0x28) {
-            const float cx=x+w/2, cy=y+42, dx=key.vk==0x25?-1.0f:key.vk==0x27?1.0f:0.0f, dy=key.vk==0x26?-1.0f:key.vk==0x28?1.0f:0.0f;
-            c.line(cx-dx*13,cy-dy*13,cx+dx*13,cy+dy*13,4,color);
-            c.line(cx+dx*13,cy+dy*13,cx+dx*3-dy*10,cy+dy*3+dx*10,4,color);
-            c.line(cx+dx*13,cy+dy*13,cx+dx*3+dy*10,cy+dy*3-dx*10,4,color);
-            continue;
-        }
-        const char* name=k.label(i);
-        const bool word=name[1]!=0;
-        const Face face=word?Face::bold:Face::extrabold;
-        const float size=word?26:36, kw=textWidth(face,size,name);
-        label(c,face,size,x+w/2-kw/2,y+42,name,color);
-    }
+    keyGrid(c,k,m.inputReady,left,396,width,84,96,surface);
     label(c,Face::semibold,24,left,912,m.inputReady?"The picture returns when you close the keyboard. Your game and audio keep running.":
         "Key presses are ignored until the game\xE2\x80\x99s input channel opens. The picture returns when you close the keyboard.",dim);
     const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Press key"},
@@ -645,6 +650,60 @@ void streamKeyboard(Canvas& c, const Model& m) {
     hints(c,l,5,r,1);
 }
 
+void overlayHints(Canvas& c, float x, float cy, const Hint* items, unsigned count) {
+    for(unsigned i=0;i<count;++i){drawHint(c,items[i],x,cy);x+=hintWidth(items[i])+32;}
+}
+float hudItem(Canvas& c, float x, float cy, Glyph icon, const char* key, const char* text) {
+    if(key)x+=pill(c,key,x,cy)+10;else x+=well(c,icon,x,cy)+10;
+    return x+label(c,Face::bold,22,x,cy,text,ink)+28;
+}
+float hudWidth(Glyph, const char* key, const char* text) {return (key?pillWidth(key):44)+10+textWidth(Face::bold,22,text)+28;}
+}
+void renderOverlay(Canvas& c, const Overlay& o) noexcept {
+    loadFonts();
+    const float y=48, h=72, cy=y+h/2;
+    c.roundRect(left,y,width,h,24,surface);
+    c.roundRectStroke(left,y,width,h,24,2,hairline);
+    const auto& k=o.keyboard;
+    const char* mode=!o.inputReady?"WAITING FOR GAME INPUT":k.open?(o.launcher?"KEYBOARD \xC2\xB7 MOUSE PAUSED":"KEYBOARD"):"LAUNCHER MOUSE";
+    const Color accent=o.inputReady?mint:amber;
+    c.disc(left+28,cy,6,accent);
+    label(c,Face::extrabold,20,left+46,cy,mode,accent,0.14f);
+    struct Item { Glyph icon; const char* key; const char* text; };
+    static const char* speeds[]={"Move \xC2\xB7 Slow","Move \xC2\xB7 Normal","Move \xC2\xB7 Fast"};
+    Item items[8];unsigned count=0;
+    if(!k.open) {
+        items[count++]={Glyph::stick,nullptr,speeds[std::min(o.speed,2U)]};
+        items[count++]={Glyph::cross,"R2","Left click"};
+        items[count++]={Glyph::cross,"L2","Right click"};
+        items[count++]={Glyph::dpad,nullptr,"Scroll"};
+        items[count++]={Glyph::square,nullptr,"Speed"};
+        items[count++]={Glyph::triangle,nullptr,"Keyboard"};
+    } else items[count++]={Glyph::circle,nullptr,o.launcher?"Back to mouse":"Close"};
+    float total=0;for(unsigned i=0;i<count;++i)total+=hudWidth(items[i].icon,items[i].key,items[i].text);
+    const char* exit=o.launcher?"R3":nullptr;
+    const float exitW=48+10+textWidth(Face::black,18,"+")+10+(exit?pillWidth(exit):44)+10+textWidth(Face::bold,22,o.launcher?"Exit":"Close");
+    float x=right-24-exitW-total;
+    for(unsigned i=0;i<count;++i)x=hudItem(c,x,cy,items[i].icon,items[i].key,items[i].text);
+    x+=optionsPill(c,x,cy)+10;x+=label(c,Face::black,18,x,cy,"+",dim)+10;
+    x+=(exit?pill(c,exit,x,cy):well(c,Glyph::triangle,x,cy))+10;
+    label(c,Face::bold,22,x,cy,o.launcher?"Exit":"Close",ink);
+    if(!k.open)return;
+    const float ph=500, py=1080-40-ph;
+    c.roundRect(left,py,width,ph,28,surface);
+    c.roundRectStroke(left,py,width,ph,28,2,hairline);
+    label(c,Face::extrabold,20,left+28,py+38,o.inputReady?"KEYBOARD \xC2\xB7 US QWERTY \xC2\xB7 TYPED KEYS ARE NOT SHOWN":"KEY PRESSES ARE IGNORED UNTIL THE GAME\xE2\x80\x99S INPUT CHANNEL OPENS",accent,0.14f);
+    char state[48]="";std::size_t at=0;
+    for(const auto& [on,name]:{std::pair{k.shift,"SHIFT"},std::pair{k.caps,"CAPS LOCK"},std::pair{k.ctrl,"CTRL"},std::pair{k.alt,"ALT"}})
+        if(on)at+=std::snprintf(state+at,sizeof(state)-at,"%s%s",at?" + ":"",name);
+    if(at)labelRight(c,Face::extrabold,18,right-28,py+38,state,mint,0.14f);
+    keyGrid(c,k,o.inputReady,left+16,py+70,width-20,62,72,raised);
+    const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Press key"},
+        {HintKind::glyph,Glyph::square,nullptr,"Backspace"},{HintKind::glyph,Glyph::triangle,nullptr,"Space"},
+        {HintKind::pill,Glyph::cross,"L1","Shift"},{HintKind::glyph,Glyph::circle,nullptr,o.launcher?"Back to mouse":"Close"}};
+    overlayHints(c,left+28,py+ph-36,l,6);
+}
+namespace {
 void failure(Canvas& c, const Model& m) {
     const auto& cv=m.session;
     const Screen s=m.screen;
@@ -675,12 +734,12 @@ void settingsRow(Canvas& c, float x, float y, float w, float h, bool focused) {
     c.roundRect(x,y,w,h,22,surface);
     if(focused)c.roundRectStroke(x-4,y-4,w+8,h+8,26,4,mint);
 }
-void infoRow(Canvas& c, float x, float y, float w, string_view key, string_view value, string_view sub) {
-    c.roundRect(x,y,w,116,22,surface);
-    label(c,Face::extrabold,28,x+32,y+44,key,ink);
-    label(c,Face::semibold,20,x+32,y+80,sub,dim);
+void infoRow(Canvas& c, float x, float y, float w, string_view key, string_view value, string_view sub, float h=116) {
+    c.roundRect(x,y,w,h,22,surface);
+    label(c,Face::extrabold,28,x+32,y+h/2-14,key,ink);
+    label(c,Face::semibold,20,x+32,y+h/2+22,sub,dim);
     const float vw=std::min(textWidth(Face::mono,24,value),w-420);
-    drawFitted(c,Face::mono,24,x+w-32-vw,baselineIn(Face::mono,24,y+40,36),value,w-420,ink);
+    drawFitted(c,Face::mono,24,x+w-32-vw,baselineIn(Face::mono,24,y+h/2-18,36),value,w-420,ink);
 }
 struct Option { const char* text; bool on, disabled; };
 void unavailableIcon(Canvas& c, float cx, float cy, Color color) {c.ring(cx,cy,7,2.2f,color);c.line(cx-5,cy+5,cx+5,cy-5,2.2f,color);}
@@ -738,7 +797,7 @@ void streamPane(Canvas& c, const Model& m, float x) {
         case StreamRow::preset: {
             head="Preset";
             bool preset=false;
-            for(unsigned p=0;p<static_cast<unsigned>(StreamProfile::count);++p)preset=preset||settingsFor(static_cast<StreamProfile>(p))==d;
+            for(unsigned p=0;p<static_cast<unsigned>(StreamProfile::count);++p)preset=preset||presetFor(static_cast<StreamProfile>(p),d)==d;
             std::snprintf(text,sizeof(text),"%u qualified presets \xC2\xB7 edits make it Custom",m.choiceCount?m.choiceCount-1:0);
             sub=text;
             stepper(c,rx,cy,preset?settingsName(d,name,sizeof(name)):string_view("Custom"));
@@ -813,12 +872,14 @@ void streamPane(Canvas& c, const Model& m, float x) {
     std::snprintf(text,sizeof(text),"%s \xC2\xB7 %s \xC2\xB7 %d Mb/s max",d.tenBit()?"HEVC":"H.264",d.hdr()?"HDR":"SDR",d.bitrate_kbps/1000);
     label(c,Face::mono,22,px+24,py+106,text,ink);
     label(c,Face::mono,22,px+24,py+140,d.hardware()?"Hardware decoding":"Software decoding",ink);
-    c.roundRect(px+24,py+172,pw-48,2,1,hairline);
-    label(c,Face::extrabold,18,px+24,py+206,"THIS PS5 OUTPUT",dim,0.14f);
+    std::snprintf(text,sizeof(text),"%s audio",d.audio_mode==audio::Mode::automatic?"Auto":d.audio_mode==audio::Mode::stereo?"Stereo":audio::modeLabel(d.audio_mode));
+    label(c,Face::mono,22,px+24,py+174,text,ink);
+    c.roundRect(px+24,py+204,pw-48,2,1,hairline);
+    label(c,Face::extrabold,18,px+24,py+238,"THIS PS5 OUTPUT",dim,0.14f);
     string_view output(m.output?m.output:"");
     if(output.rfind("OUTPUT ",0)==0)output.remove_prefix(7);
-    drawWrapped(c,Face::mono,20,px+24,py+224,30,output,pw-48,2,muted);
-    drawWrapped(c,Face::semibold,19,px+24,py+292,26,"The actual stream can differ. The game, your plan and the network decide.",pw-48,2,dim);
+    drawWrapped(c,Face::mono,20,px+24,py+256,30,output,pw-48,2,muted);
+    drawWrapped(c,Face::semibold,19,px+24,py+320,26,"The actual stream can differ. The game, your plan and the network decide.",pw-48,2,dim);
     const char* title;const char* body;Color accent;char status[96];
     if(dirty&&problem){title="Can\xE2\x80\x99t save yet";body=problem;accent=coral;}
     else if(dirty&&m.adjusted){std::snprintf(status,sizeof(status),"%u setting%s adjusted",m.adjusted,m.adjusted==1?"":"s");title=status;body="Changed to fit Software decoding. Kept until you Save or Revert.";accent=amber;}
@@ -988,6 +1049,67 @@ void fixedConfirm(Canvas& c, const Model& m) {
     const Hint r[]={{HintKind::glyph,Glyph::cross,nullptr,"Use fixed resolution"},{HintKind::glyph,Glyph::circle,nullptr,"Keep current draft"}};
     hints(c,nullptr,0,r,2);
 }
+const char* layoutName(unsigned channels) {return channels==8?"7.1":channels==6?"5.1":"Stereo";}
+void displayPane(Canvas& c, const Model& m, float x, float w) {
+    string_view output(m.output?m.output:"");
+    if(output.rfind("OUTPUT ",0)==0)output.remove_prefix(7);
+    infoRow(c,x,368,w,"Video output",output,"VideoOut mode chosen at startup",94);
+    char codecs[96]{};
+    for(const auto& [on,text]:{std::pair{m.caps.hevcHdr,"HEVC Main10 HDR"},std::pair{m.caps.hevcSdr,"HEVC Main10"},std::pair{m.caps.h264Hardware,"H.264"}})
+        if(on)std::snprintf(codecs+std::strlen(codecs),sizeof(codecs)-std::strlen(codecs),"%s%s",*codecs?" \xC2\xB7 ":"",text);
+    infoRow(c,x,474,w,"Hardware video",*codecs?codecs:"Software decoding only","Modes that passed the startup test streams",94);
+    const auto mode=m.draft.audio_mode;
+    const unsigned capacity=m.audio.capacity, asked=audio::requestedChannels(mode,capacity);
+    settingsRow(c,x,580,w,94,m.settingsContent&&m.settingsRow==0);
+    const float hw=label(c,Face::extrabold,28,x+32,614,"Audio channels",ink);
+    if(mode!=m.defaults.audio_mode)c.disc(x+32+hw+14,614,5,amber);
+    char line[256];
+    if(mode==audio::Mode::automatic)std::snprintf(line,sizeof(line),"Auto asks for the widest layout the startup audio port probe accepted: up to %u channels",capacity);
+    else if(mode==audio::Mode::stereo)std::snprintf(line,sizeof(line),"Asks NVIDIA for 2 channels");
+    else if(asked<(mode==audio::Mode::surround71?8U:6U))std::snprintf(line,sizeof(line),"The startup audio port probe accepted %u channels, so OpenNOW asks for %s",capacity,layoutName(asked));
+    else std::snprintf(line,sizeof(line),"Asks NVIDIA for %u channels. The session can still negotiate stereo.",asked);
+    drawFitted(c,Face::semibold,20,x+32,baselineIn(Face::semibold,20,630,28),line,w-500,dim);
+    const Option o[]={{"Auto",mode==audio::Mode::automatic,false},{"Stereo",mode==audio::Mode::stereo,false},
+                      {"5.1",mode==audio::Mode::surround51,false},{"7.1",mode==audio::Mode::surround71,false}};
+    segmented(c,x+w-16,627,o,4);
+    const float cy=684;
+    c.roundRectStroke(x,cy,w,198,22,2,hairline);
+    label(c,Face::extrabold,18,x+32,cy+30,"LAST SESSION AUDIO",dim,0.14f);
+    const auto& a=m.audio;
+    if(!a.requested) {
+        drawWrapped(c,Face::semibold,22,x+32,cy+60,32,"No stream yet since OpenNOW started. After you play, this shows the layout requested and the layout negotiated for that session.",w-64,2,muted);
+    } else {
+        label(c,Face::semibold,18,x+32,cy+66,"Requested",dim);
+        std::snprintf(line,sizeof(line),"%s \xC2\xB7 %u channels",layoutName(a.requested),a.requested);
+        const float rw=label(c,Face::mono,24,x+32,cy+96,line,ink);
+        const float nx=x+32+std::max(rw+48,280.0f);
+        label(c,Face::semibold,18,nx,cy+66,"Negotiated",dim);
+        if(a.negotiated)std::snprintf(line,sizeof(line),"%s \xC2\xB7 Opus %u channels",layoutName(a.negotiated),a.negotiated);
+        else std::snprintf(line,sizeof(line),"Not negotiated");
+        label(c,Face::mono,24,nx,cy+96,line,a.negotiated&&a.negotiated>=a.requested?ink:amber);
+        char why[96];
+        if(a.fallback)std::snprintf(why,sizeof(why),"The cloud described surround but sent stereo, so OpenNOW fell back to stereo.");
+        else if(!a.negotiated)std::snprintf(why,sizeof(why),"Audio wasn\xE2\x80\x99t set up in that session.");
+        else if(a.negotiated<a.requested)std::snprintf(why,sizeof(why),"This session negotiated %s instead of the requested layout.",layoutName(a.negotiated));
+        else std::snprintf(why,sizeof(why),"This session negotiated the requested layout.");
+        std::snprintf(line,sizeof(line),"%s The startup audio port probe accepted %u channels; that isn\xE2\x80\x99t a check of your speakers or receiver.",why,a.capacity);
+        drawWrapped(c,Face::semibold,20,x+32,cy+122,28,line,w-64,2,muted);
+    }
+    const unsigned dirty=changedRows(m.draft,m.defaults);
+    const char* problem=settingsProblem(m.draft,m.draftAvailable);
+    const Color dot=dirty&&problem?coral:dirty?amber:m.settings.saveError?coral:mint;
+    if(dirty&&problem)std::snprintf(line,sizeof(line),"Can\xE2\x80\x99t save yet \xC2\xB7 %s",problem);
+    else if(dirty==audioBit)std::snprintf(line,sizeof(line),"Unsaved \xC2\xB7 saved with your stream settings \xC2\xB7 Options saves,");
+    else if(dirty)std::snprintf(line,sizeof(line),"%u unsaved stream changes \xC2\xB7 Options saves all of them,",rowCount(dirty));
+    else if(m.settings.saveError)std::snprintf(line,sizeof(line),"Couldn\xE2\x80\x99t save on this PS5 \xC2\xB7 error %d",m.settings.saveError);
+    else std::snprintf(line,sizeof(line),"Saved with your stream settings \xC2\xB7 used when you press Play");
+    c.disc(x+38,914,5,dot);
+    const float fw=label(c,Face::bold,20,x+54,914,line,muted);
+    if(dirty&&!problem) {
+        glyph(c,Glyph::square,x+54+fw+18,914,muted,22);
+        label(c,Face::bold,20,x+54+fw+36,914,dirty==audioBit?"reverts":"reverts all",muted);
+    }
+}
 void settings(Canvas& c, const Model& m) {
     const char* panes[]={"Stream","Display & audio","Cover art & cache","Account","About"};
     for(unsigned i=0;i<settingsPanes;++i) {
@@ -1012,16 +1134,8 @@ void settings(Canvas& c, const Model& m) {
         title("Cover art & cache",m.artworkWanted?"Covers are saved on this PS5, so Library and Browse open fast after a restart.":"Saving is off, so covers download again after each restart.");
         cachePane(c,m,x,w);
     } else if(m.pane==SettingsPane::display) {
-        title("Display & audio","Reported by this PS5 when OpenNOW starts. Nothing here can be changed.");
-        string_view output(m.output?m.output:"");
-        if(output.rfind("OUTPUT ",0)==0)output.remove_prefix(7);
-        infoRow(c,x,384,w,"Video output",output,"VideoOut mode chosen at startup");
-        char codecs[96]{};
-        for(const auto& [on,text]:{std::pair{m.caps.hevcHdr,"HEVC Main10 HDR"},std::pair{m.caps.hevcSdr,"HEVC Main10"},std::pair{m.caps.h264Hardware,"H.264"}})
-            if(on)std::snprintf(codecs+std::strlen(codecs),sizeof(codecs)-std::strlen(codecs),"%s%s",*codecs?" \xC2\xB7 ":"",text);
-        infoRow(c,x,514,w,"Hardware video",*codecs?codecs:"Software decoding only","Modes that passed the startup test streams");
-        infoRow(c,x,644,w,"Audio","Opus \xC2\xB7 stereo","Negotiated for every session");
-        drawWrapped(c,Face::semibold,22,x+32,790,32,"To change resolution or HDR for the whole console, use the PS5\xE2\x80\x99s own Settings \xE2\x80\xBA Screen and Video, then restart OpenNOW.",w-64,2,muted);
+        title("Display & audio","Video output is reported by this PS5. Audio channels are a request to NVIDIA.");
+        displayPane(c,m,x,w);
     } else if(m.pane==SettingsPane::account) {
         title("Account","Your NVIDIA sign-in for GeForce NOW on this PS5.");
         c.roundRect(x,380,w,126,22,surface);
@@ -1068,6 +1182,13 @@ void settings(Canvas& c, const Model& m) {
         const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move / change"},{HintKind::glyph,Glyph::cross,nullptr,row==StreamRow::reset?"Reset":"Edit"}};
         const Hint r[]={{canSave?HintKind::optionsMint:HintKind::glyph,Glyph::options,nullptr,"Save"},{HintKind::glyph,Glyph::square,nullptr,"Revert"},back};
         hints(c,l,editable||row==StreamRow::reset?2:1,r,3);
+        return;
+    }
+    if(m.settingsContent&&m.pane==SettingsPane::display) {
+        const bool canSave=changedRows(m.draft,m.defaults)&&!settingsProblem(m.draft,m.draftAvailable);
+        const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move / change"}};
+        const Hint r[]={{canSave?HintKind::optionsMint:HintKind::glyph,Glyph::options,nullptr,"Save"},{HintKind::glyph,Glyph::square,nullptr,"Revert"},back};
+        hints(c,l,1,r,3);
         return;
     }
     if(m.settingsContent) {
@@ -1163,7 +1284,7 @@ const CloudView& catalogFor(Section section,const CloudView& session,const Cloud
 }
 
 unsigned settingsRows(SettingsPane pane) noexcept {
-    return pane==SettingsPane::stream?static_cast<unsigned>(StreamRow::count):pane==SettingsPane::cache?2:pane==SettingsPane::account?1:0;
+    return pane==SettingsPane::stream?static_cast<unsigned>(StreamRow::count):pane==SettingsPane::cache?2:pane==SettingsPane::account||pane==SettingsPane::display?1:0;
 }
 
 unsigned qualifiedPresets(StreamProfile* out, unsigned capacity, bool (*available)(const StreamSettings&)) noexcept {
