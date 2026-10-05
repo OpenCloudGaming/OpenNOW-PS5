@@ -7,7 +7,7 @@
 #include <map>
 using namespace opennow;
 static Response response(const char* s){return {200,const_cast<char*>(s),std::strlen(s),nullptr};}
-struct Mock {std::map<std::string,const char*> byCursor;unsigned graphql=0;unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody,catalogBody;const char* catalog=nullptr;const char* created=nullptr;long stopStatus=200;bool stopError=false;};
+struct Mock {std::map<std::string,const char*> byCursor;unsigned graphql=0;unsigned posts=0,deletes=0,nettests=0;bool reject=false;const char* poll=nullptr;std::string body,netBody,catalogBody;const char* catalog=nullptr;const char* created=nullptr;long stopStatus=200;bool stopError=false;StreamSettings* mutateSettings=nullptr;};
 static Response request(void* p,const char* method,const char* url,const char* body,const char*,const char*) {
  auto& m=*static_cast<Mock*>(p);
  if(std::strstr(url,"serviceUrls"))return response(R"({"gfnServiceInfo":{"gfnServiceEndpoints":[{"idpId":"PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg","streamingServiceUrl":"https://test.geforcenow.com/"}]}})");
@@ -16,7 +16,7 @@ static Response request(void* p,const char* method,const char* url,const char* b
   if(!m.byCursor.empty()){auto* root=cJSON_Parse(body);std::string cursor=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"variables"),"cursor")->valuestring;cJSON_Delete(root);
    auto found=m.byCursor.find(cursor);if(found==m.byCursor.end()){auto r=response("{}");r.status=500;return r;}return response(found->second);}
   if(m.catalog)return response(m.catalog);return response(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Fixture Game","variants":[{"id":"42","appStore":"XBOX"},{"id":"43","appStore":"STEAM"}]}]}}})");}
- if(std::strstr(url,"nettestsession")){++m.nettests;m.netBody=body;return response(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"net-fixture"}})");}
+ if(std::strstr(url,"nettestsession")){++m.nettests;m.netBody=body;if(m.mutateSettings){*m.mutateSettings={};m.mutateSettings=nullptr;}return response(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"net-fixture"}})");}
  if(!std::strcmp(method,"POST")){if(m.reject){auto r=response(R"({"requestStatus":{"statusCode":4,"statusDescription":"INTERNAL_ERROR_STATUS","unifiedErrorCode":123}})");r.status=500;return r;}++m.posts;m.body=body;if(m.created)return response(m.created);return response(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-id","status":0,"queuePosition":5}})");}
  if(!std::strcmp(method,"DELETE")){++m.deletes;auto r=response("{}");r.status=m.stopStatus;if(m.stopError)r.error="fixture network failure";return r;}
  if(m.poll)return response(m.poll);
@@ -142,23 +142,23 @@ int main(){
  }
  // The allocation request and net-test must match every negotiated profile.
  for(auto profile:{StreamProfile::quality,StreamProfile::smooth,StreamProfile::experimental,StreamProfile::compatibility,StreamProfile::native_hdr120,StreamProfile::native_hdr60,StreamProfile::native_4k120,StreamProfile::native_1080,StreamProfile::native_hdr90,StreamProfile::native_4k90}){
-  c.launch("fixture-jwt","fixture-device",50,profile);
+  c.launch("fixture-jwt","fixture-device",50,settingsFor(profile));
   const auto settings=settingsFor(profile);
   auto* root=cJSON_Parse(m.body.c_str());assert(root);
   auto* request=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
   auto* features=cJSON_GetObjectItemCaseSensitive(request,"requestedStreamingFeatures");
   auto* monitor=cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(request,"clientRequestMonitorSettings"),0);
   assert(cJSON_GetObjectItemCaseSensitive(features,"maxBitrateKbps")->valueint==settings.bitrate_kbps);
-  assert(cJSON_GetObjectItemCaseSensitive(features,"codec")->valueint==(settings.codec==VideoCodec::hevc?2:1));
-  assert(cJSON_GetObjectItemCaseSensitive(features,"bitDepth")->valueint==(settings.hdr?1:0));
+  assert(cJSON_GetObjectItemCaseSensitive(features,"codec")->valueint==(settings.codec()==VideoCodec::hevc?2:1));
+  assert(cJSON_GetObjectItemCaseSensitive(features,"bitDepth")->valueint==(settings.tenBit()?1:0));
   assert(cJSON_GetObjectItemCaseSensitive(features,"audioChannelCount")->valueint==2);
-  assert((cJSON_GetObjectItemCaseSensitive(features,"dynamicStreamingMode")==nullptr)==settings.hardware);
-  assert(cJSON_GetObjectItemCaseSensitive(request,"sdrHdrMode")->valueint==(settings.hdr?1:0));
+  assert((cJSON_GetObjectItemCaseSensitive(features,"dynamicStreamingMode")==nullptr)==(settings.network==NetworkPolicy::fixed));
+  assert(cJSON_GetObjectItemCaseSensitive(request,"sdrHdrMode")->valueint==(settings.hdr()?1:0));
   assert(cJSON_GetObjectItemCaseSensitive(monitor,"widthInPixels")->valueint==settings.width);
   assert(cJSON_GetObjectItemCaseSensitive(monitor,"heightInPixels")->valueint==settings.height);
   assert(cJSON_GetObjectItemCaseSensitive(monitor,"framesPerSecond")->valueint==settings.fps);
   const auto* display=cJSON_GetObjectItemCaseSensitive(monitor,"displayData");
-  if(settings.hdr){
+  if(settings.hdr()){
    assert(cJSON_IsObject(display));
    assert(cJSON_GetObjectItemCaseSensitive(display,"desiredContentMaxLuminance")->valueint==1000);
    assert(cJSON_GetObjectItemCaseSensitive(display,"desiredContentMinLuminance")->valueint==0);
@@ -171,7 +171,32 @@ int main(){
   assert(cJSON_GetObjectItemCaseSensitive(net,"heightInPixels")->valueint==settings.height);
   assert(cJSON_GetObjectItemCaseSensitive(net,"framesPerSecond")->valueint==settings.fps);
   cJSON_Delete(root);
-  assert(c.session().profile==profile);c.stop("fixture-jwt","fixture-device");
+  assert(c.session().settings==settings);c.stop("fixture-jwt","fixture-device");
+ }
+ {
+  Mock snapshot;Cloud client(request,&snapshot);client.load("fixture-jwt","fixture-device");
+  StreamSettings custom{1440,1080,47,32000,VideoMode::hevcMain10SdrHardware,QualityMode::clarity,NetworkPolicy::adaptive};
+  const auto expected=custom;snapshot.mutateSettings=&custom;
+  client.launch("fixture-jwt","fixture-device",50,custom);
+  assert(custom==StreamSettings{}&&client.session().settings==expected);
+  auto* root=cJSON_Parse(snapshot.body.c_str());assert(root);
+  auto* req=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
+  auto* features=cJSON_GetObjectItemCaseSensitive(req,"requestedStreamingFeatures");
+  auto* monitor=cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(req,"clientRequestMonitorSettings"),0);
+  assert(cJSON_GetObjectItemCaseSensitive(features,"bitDepth")->valueint==1);
+  assert(cJSON_GetObjectItemCaseSensitive(features,"codec")->valueint==2);
+  assert(cJSON_GetObjectItemCaseSensitive(features,"dynamicStreamingMode")->valueint==3);
+  assert(cJSON_GetObjectItemCaseSensitive(features,"maxBitrateKbps")->valueint==32000);
+  assert(cJSON_GetObjectItemCaseSensitive(req,"sdrHdrMode")->valueint==0);
+  assert(cJSON_GetObjectItemCaseSensitive(monitor,"widthInPixels")->valueint==1440);
+  assert(cJSON_GetObjectItemCaseSensitive(monitor,"heightInPixels")->valueint==1080);
+  assert(cJSON_GetObjectItemCaseSensitive(monitor,"framesPerSecond")->valueint==47);cJSON_Delete(root);
+  client.tick("fixture-jwt","fixture-device",53);assert(client.session().settings==expected);
+  assert(client.stop("fixture-jwt","fixture-device"));
+  assert(client.session().settings==StreamSettings{}&&!*client.session().id&&!*client.session().signaling&&!*client.session().mediaIp);
+  custom=expected;custom.fps=240;const auto requests=snapshot.nettests;
+  client.launch("fixture-jwt","fixture-device",60,custom);
+  assert(client.view().launchError&&snapshot.nettests==requests&&!*client.session().id);
  }
  m.reject=true;c.launch("fixture-jwt","fixture-device",20);assert(c.view().state==CloudState::failed);assert(std::strstr(c.view().message,"INTERNAL_ERROR_STATUS"));assert(std::strstr(c.view().message,"unified 123"));
  assert(c.view().launchError&&!*c.session().id);
@@ -242,20 +267,20 @@ int main(){
   assert(client.library().state==CloudState::failed&&client.library().count==1&&!std::strcmp(client.library().games[0].id,"51"));
   assert(std::strstr(client.library().message,"Library request failed"));
   assert(client.view().state==CloudState::idle&&!client.view().count);
-  client.launchEntry(CatalogSource::library,0,"fixture-jwt","fixture-device",50,StreamProfile::quality);
+  client.launchEntry(CatalogSource::library,0,"fixture-jwt","fixture-device",50,settingsFor(StreamProfile::quality));
   assert(pages.posts==0&&!*client.session().id);
   pages.catalog=R"({"data":{"apps":{"pageInfo":{"hasNextPage":true,"endCursor":"lib-2"},"items":[{"title":"Library One","variants":[{"id":"51","appStore":"STEAM","gfn":{"library":{"status":"MANUAL"}}}]}]}}})";
   client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
   pages.catalog=nullptr;
   client.load("fixture-jwt","fixture-device");
   assert(client.view().count==2&&client.library().count==1&&client.library().state==CloudState::catalog);
-  client.launchEntry(CatalogSource::library,0,"fixture-jwt","fixture-device",50,StreamProfile::quality);
+  client.launchEntry(CatalogSource::library,0,"fixture-jwt","fixture-device",50,settingsFor(StreamProfile::quality));
   assert(pages.body.find("\"cmsId\":\"51\"")!=std::string::npos);
   assert(!std::strcmp(client.view().current.id,"51")&&!std::strcmp(client.view().current.title,"Library One"));
   client.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
   assert(client.library().state==CloudState::catalog&&!std::strcmp(client.library().games[0].id,"51"));
   assert(client.stop("fixture-jwt","fixture-device"));
-  client.launchEntry(CatalogSource::library,5,"fixture-jwt","fixture-device",60,StreamProfile::quality);
+  client.launchEntry(CatalogSource::library,5,"fixture-jwt","fixture-device",60,settingsFor(StreamProfile::quality));
   assert(pages.posts==1&&!*client.session().id);
  }
  {

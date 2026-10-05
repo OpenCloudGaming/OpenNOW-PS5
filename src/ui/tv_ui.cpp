@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string_view>
+#include "artwork_disk.hpp"
 #include <utility>
 
 namespace opennow::ui {
@@ -166,13 +167,20 @@ void logo(Canvas& c, float x, float y) {
 string_view profileName(StreamProfile p, char* buffer, std::size_t size) {
     const auto s=settingsFor(p);
     const char* prefix=p==StreamProfile::quality?"Quality ":p==StreamProfile::smooth?"Smooth ":p==StreamProfile::experimental?"Experimental ":p==StreamProfile::compatibility?"Compatibility ":"";
-    if(s.height>=2160)std::snprintf(buffer,size,"%s4K%d %s",prefix,s.fps,s.hdr?"HDR":"SDR");
+    if(s.height>=2160)std::snprintf(buffer,size,"%s4K%d %s",prefix,s.fps,s.hdr()?"HDR":"SDR");
     else std::snprintf(buffer,size,"%s%dp%d",prefix,s.height,s.fps);
     return buffer;
 }
-string_view profileSpec(StreamProfile p, char* buffer, std::size_t size) {
-    const auto s=settingsFor(p);
-    std::snprintf(buffer,size,"%s \xC2\xB7 %s \xC2\xB7 %d Mb/s",s.codec==VideoCodec::hevc?(s.hdr?"HEVC 10-bit":"HEVC"):"H.264",s.hardware?"hardware":"software",s.bitrate_kbps/1000);
+string_view settingsName(const StreamSettings& s, char* buffer, std::size_t size) {
+    for(unsigned i=0;i<static_cast<unsigned>(StreamProfile::count);++i)
+        if(settingsFor(static_cast<StreamProfile>(i))==s)return profileName(static_cast<StreamProfile>(i),buffer,size);
+    if(s.height>=2160)std::snprintf(buffer,size,"Custom 4K%d %s",s.fps,s.hdr()?"HDR":"SDR");
+    else std::snprintf(buffer,size,"Custom %dp%d%s",s.height,s.fps,s.hdr()?" HDR":"");
+    return buffer;
+}
+const char* codecLabel(const StreamSettings& s) {return s.hdr()?"HEVC HDR":s.tenBit()?"HEVC 10-bit":"H.264";}
+string_view settingsSpec(const StreamSettings& s, char* buffer, std::size_t size) {
+    std::snprintf(buffer,size,"%d\xC3\x97%d \xC2\xB7 %s \xC2\xB7 %s \xC2\xB7 %d Mb/s",s.width,s.height,codecLabel(s),s.hardware()?"hardware":"software",s.bitrate_kbps/1000);
     return buffer;
 }
 void topBar(Canvas& c, const Model& m, bool tabs) {
@@ -495,11 +503,8 @@ void detail(Canvas& c, const Model& m) {
         drawFitted(c,Face::extrabold,24,x+22+14+12,baselineIn(Face::extrabold,24,452,56),entry.store,w-70,selected?ink:muted);
         x+=w+14;
     }
-    StreamProfile profiles[static_cast<unsigned>(StreamProfile::count)];
-    const unsigned available=availableProfiles(m.profileMask,profiles,static_cast<unsigned>(StreamProfile::count));
-    unsigned selected=0;
-    for(unsigned i=0;i<available;++i)if(profiles[i]==m.profile)selected=i;
-    label(c,Face::extrabold,20,left,567,"STREAM PROFILE",dim,0.14f);
+    const unsigned available=m.choiceCount, selected=std::min(m.choice,available?available-1:0);
+    label(c,Face::extrabold,20,left,567,"STREAM SETTINGS",dim,0.14f);
     char position[32];std::snprintf(position,sizeof(position),"%u of %u",selected+1,available);
     labelRight(c,Face::bold,20,left+room,567,position,dim);
     const unsigned visible=4;
@@ -510,9 +515,9 @@ void detail(Canvas& c, const Model& m) {
         if(on){c.roundRect(left,y,room,76,18,raised);c.roundRectStroke(left-4,y-4,room+8,84,22,4,mint);}
         if(on){c.disc(left+28+11,y+38,11,mint);c.disc(left+28+11,y+38,6,raised);c.disc(left+28+11,y+38,5,mint);}
         else c.ring(left+28+11,y+38,10,2,dim);
-        char name[48],spec[64];
-        label(c,Face::extrabold,30,left+70,y+38,profileName(profiles[i],name,sizeof(name)),ink);
-        label(c,Face::mono,22,left+450,y+38,profileSpec(profiles[i],spec,sizeof(spec)),muted);
+        char name[48],spec[96];
+        drawFitted(c,Face::extrabold,30,left+70,baselineIn(Face::extrabold,30,y+20,36),i==0?"Your default":settingsName(m.choices[i],name,sizeof(name)),360,ink);
+        drawFitted(c,Face::mono,20,left+450,baselineIn(Face::mono,20,y+24,28),settingsSpec(m.choices[i],spec,sizeof(spec)),room-480,muted);
     }
     if(first>0){const float up[]={left+room-24,600,left+room-14,612,left+room-34,612};c.polygon(up,3,dim);}
     if(first+visible<available){const float down[]={left+room-24,925,left+room-14,913,left+room-34,913};c.polygon(down,3,dim);}
@@ -523,10 +528,11 @@ void detail(Canvas& c, const Model& m) {
     string_view output(m.output?m.output:"");
     if(output.rfind("OUTPUT ",0)==0)output.remove_prefix(7);
     drawWrapped(c,Face::mono,22,px+40,py+118,32,output,pw-80,2,ink);
-    label(c,Face::bold,26,px+40,py+214,"Stream profile",muted);
-    char name[48],spec[64];
-    label(c,Face::mono,22,px+40,py+252,profileName(m.profile,name,sizeof(name)),ink);
-    label(c,Face::mono,22,px+40,py+284,profileSpec(m.profile,spec,sizeof(spec)),muted);
+    label(c,Face::bold,26,px+40,py+214,"Requested stream",muted);
+    char name[48],spec[96];
+    const StreamSettings& chosen=available?m.choices[selected]:m.defaults;
+    label(c,Face::mono,22,px+40,py+252,settingsName(chosen,name,sizeof(name)),ink);
+    drawFitted(c,Face::mono,20,px+40,baselineIn(Face::mono,20,py+270,28),settingsSpec(chosen,spec,sizeof(spec)),pw-80,muted);
     c.roundRect(px+40,py+322,pw-80,2,1,hairline);
     char play[96];std::snprintf(play,sizeof(play),"Play on %s",game.store);
     c.roundRect(px+40,py+354,pw-80,88,44,mint);
@@ -535,7 +541,7 @@ void detail(Canvas& c, const Model& m) {
     c.disc(startX+24,py+398,24,mintInk);glyph(c,Glyph::cross,startX+24,py+398,ink);
     drawFitted(c,Face::black,32,startX+48+18,baselineIn(Face::black,32,py+354,88),play,pw-80-110,mintInk);
     drawWrapped(c,Face::semibold,22,px+40,py+464,30,"Your session starts in the cloud. You can wait in the queue or cancel at any time.",pw-80,2,muted);
-    const Hint l[]={{HintKind::glyph,Glyph::cross,nullptr,"Play"},{HintKind::glyph,Glyph::dpad,nullptr,count>1?"Store / profile":"Profile"},{HintKind::pill,Glyph::cross,"L1","Next profile"}};
+    const Hint l[]={{HintKind::glyph,Glyph::cross,nullptr,"Play"},{HintKind::glyph,Glyph::dpad,nullptr,count>1?"Store / settings":"Settings"},{HintKind::pill,Glyph::cross,"L1","Next"}};
     const Hint r[]={{HintKind::glyph,Glyph::circle,nullptr,"Back"}};
     hints(c,l,3,r,1);
 }
@@ -654,7 +660,7 @@ void failure(Canvas& c, const Model& m) {
     char second[256]{};
     if(*cv.current.title) {
         char name[48];
-        std::snprintf(second,sizeof(second),"%s \xC2\xB7 %s \xC2\xB7 %s",cv.current.title,cv.current.store,profileName(m.launchProfile,name,sizeof(name)).data());
+        std::snprintf(second,sizeof(second),"%s \xC2\xB7 %s \xC2\xB7 %s",cv.current.title,cv.current.store,settingsName(m.launch,name,sizeof(name)).data());
     }
     detailCard(c,y+28,*cv.message?cv.message:"No details reported",second,coral);
     float x=left;
@@ -676,8 +682,314 @@ void infoRow(Canvas& c, float x, float y, float w, string_view key, string_view 
     const float vw=std::min(textWidth(Face::mono,24,value),w-420);
     drawFitted(c,Face::mono,24,x+w-32-vw,baselineIn(Face::mono,24,y+40,36),value,w-420,ink);
 }
+struct Option { const char* text; bool on, disabled; };
+void unavailableIcon(Canvas& c, float cx, float cy, Color color) {c.ring(cx,cy,7,2.2f,color);c.line(cx-5,cy+5,cx+5,cy-5,2.2f,color);}
+float segmented(Canvas& c, float rightX, float cy, const Option* options, unsigned count) {
+    float widths[4],total=8+4*(count-1.0f);
+    for(unsigned i=0;i<count;++i){widths[i]=36+textWidth(Face::extrabold,20,options[i].text)+(options[i].disabled?24:0);total+=widths[i];}
+    float x=rightX-total;
+    c.roundRect(x,cy-24,total,48,24,raised);
+    x+=4;
+    for(unsigned i=0;i<count;++i) {
+        const auto& o=options[i];
+        if(o.on)c.roundRect(x,cy-20,widths[i],40,20,ink);
+        float tx=x+18;
+        if(o.disabled){unavailableIcon(c,tx+8,cy,dim);tx+=24;}
+        label(c,Face::extrabold,20,tx,cy,o.text,o.on?ground:o.disabled?dim:muted);
+        x+=widths[i]+4;
+    }
+    return total;
+}
+float stepper(Canvas& c, float rightX, float cy, string_view text) {
+    const float tw=std::max(textWidth(Face::black,22,text),100.0f), w=8+36+8+tw+8+36+8, x=rightX-w;
+    c.roundRect(x,cy-24,w,48,24,raised);
+    for(int side=0;side<2;++side) {
+        const float cx=side?x+w-8-18:x+8+18;
+        c.disc(cx,cy,18,hairline);
+        const float d=side?3.5f:-3.5f;
+        c.line(cx-d,cy-7,cx+d,cy,3,ink);c.line(cx+d,cy,cx-d,cy+7,3,ink);
+    }
+    const float vw=textWidth(Face::black,22,text);
+    label(c,Face::black,22,x+w/2-vw/2,cy,text,ink);
+    return w;
+}
+float editValue(Canvas& c, float rightX, float cy, string_view text) {
+    const float pw=8+30+8+textWidth(Face::extrabold,18,"Edit")+14, px=rightX-pw;
+    c.roundRect(px,cy-20,pw,40,20,raised);
+    c.disc(px+8+15,cy,15,hairline);glyph(c,Glyph::cross,px+8+15,cy,ink,18);
+    label(c,Face::extrabold,18,px+8+30+8,cy,"Edit",ink);
+    const float tw=textWidth(Face::mono,24,text);
+    label(c,Face::mono,24,px-14-tw,cy,text,ink);
+    return pw+14+tw;
+}
+void streamPane(Canvas& c, const Model& m, float x) {
+    const StreamSettings& d=m.draft;
+    const unsigned dirty=changedRows(d,m.defaults);
+    const char* problem=settingsProblem(d,m.draftAvailable);
+    const bool anyHardware=m.caps.h264Hardware||m.caps.hevcSdr||m.caps.hevcHdr;
+    const float rw=800;
+    char text[96],name[48];
+    for(unsigned i=0;i<static_cast<unsigned>(StreamRow::count);++i) {
+        const auto row=static_cast<StreamRow>(i);
+        const float y=360+i*72.0f, cy=y+32, rx=x+rw-12;
+        settingsRow(c,x,y,rw,64,m.settingsContent&&m.settingsRow==i);
+        const char* head="";const char* sub="";Color subColor=dim;
+        switch(row) {
+        case StreamRow::preset: {
+            head="Preset";
+            bool preset=false;
+            for(unsigned p=0;p<static_cast<unsigned>(StreamProfile::count);++p)preset=preset||settingsFor(static_cast<StreamProfile>(p))==d;
+            std::snprintf(text,sizeof(text),"%u qualified presets \xC2\xB7 edits make it Custom",m.choiceCount?m.choiceCount-1:0);
+            sub=text;
+            stepper(c,rx,cy,preset?settingsName(d,name,sizeof(name)):string_view("Custom"));
+            break;
+        }
+        case StreamRow::decoding: {
+            head="Decoding";
+            sub=!anyHardware?"Hardware decoding isn\xE2\x80\x99t qualified on this PS5":d.hardware()?"PS5 video decoder":"CPU decoding, H.264 only";
+            if(!anyHardware)subColor=amber;
+            const Option o[]={{"Hardware accelerated",d.hardware(),!anyHardware},{"Software",!d.hardware(),false}};
+            segmented(c,rx,cy,o,2);
+            break;
+        }
+        case StreamRow::codec: {
+            head="Codec";
+            const bool hevc=m.caps.hevcSdr||m.caps.hevcHdr;
+            sub=!d.hardware()?"Software decodes H.264 only":!hevc?"HEVC isn\xE2\x80\x99t qualified on this PS5":"AV1 is unavailable in this port";
+            if(!d.hardware()||!hevc)subColor=amber;
+            const Option o[]={{"H.264",!d.tenBit(),d.hardware()&&!m.caps.h264Hardware},{"HEVC",d.tenBit(),!d.hardware()||!hevc},{"AV1",false,true}};
+            segmented(c,rx,cy,o,3);
+            break;
+        }
+        case StreamRow::resolution:
+            head="Resolution";
+            sub=d.hardware()?"Even sizes, 320\xC3\x97" "180 to 3840\xC3\x97" "2160":"Software: up to 1920\xC3\x97" "1080";
+            if(!d.hardware())subColor=amber;
+            if(validateSettings(d)==SettingsError::dimensions){sub=problem;subColor=coral;}
+            std::snprintf(text,sizeof(text),"%d \xC3\x97 %d",d.width,d.height);
+            editValue(c,rx,cy,text);
+            break;
+        case StreamRow::fps:
+            head="Frame rate";
+            sub=d.hardware()?"Any whole number, 30 to 120":"Software: 30 to 60";
+            if(!d.hardware())subColor=amber;
+            if(validateSettings(d)==SettingsError::fps){sub=problem;subColor=coral;}
+            std::snprintf(text,sizeof(text),"%d FPS",d.fps);
+            stepper(c,rx,cy,text);
+            break;
+        case StreamRow::bitrate:
+            head="Bitrate limit";
+            sub="4 to 100 Mb/s \xC2\xB7 the cloud may send less";
+            std::snprintf(text,sizeof(text),"%d Mb/s",d.bitrate_kbps/1000);
+            stepper(c,rx,cy,text);
+            break;
+        case StreamRow::hdr: {
+            head="HDR";
+            sub=!d.tenBit()?"Needs HEVC and hardware decoding":!m.caps.hevcHdr?"HDR isn\xE2\x80\x99t qualified on this PS5":"HEVC Main10 with HDR10";
+            if(d.tenBit()&&!m.caps.hevcHdr)subColor=amber;
+            const Option o[]={{"Off",!d.hdr(),d.tenBit()&&!m.caps.hevcSdr},{"On",d.hdr(),!d.tenBit()||!m.caps.hevcHdr}};
+            segmented(c,rx,cy,o,2);
+            break;
+        }
+        case StreamRow::reset: {
+            head="Reset to best available";
+            sub="Forgets the saved default. Your NVIDIA login stays.";
+            const float bw=44+12+textWidth(Face::bold,24,"Reset");
+            well(c,Glyph::cross,rx-bw,cy);
+            label(c,Face::bold,24,rx-bw+56,cy,"Reset",ink);
+            break;
+        }
+        case StreamRow::count: break;
+        }
+        const float hw=label(c,Face::extrabold,24,x+28,y+20,head,ink);
+        if(dirty&rowBit(row))c.disc(x+28+hw+12,y+20,5,amber);
+        drawFitted(c,Face::semibold,18,x+28,baselineIn(Face::semibold,18,y+32,24),sub,430,subColor);
+    }
+    const float px=x+rw+32, pw=right-px, py=360, ph=568;
+    c.roundRectStroke(px,py,pw,ph,22,2,hairline);
+    label(c,Face::extrabold,18,px+24,py+36,"REQUESTED",mint,0.14f);
+    std::snprintf(text,sizeof(text),"%d \xC3\x97 %d \xC2\xB7 %d FPS",d.width,d.height,d.fps);
+    label(c,Face::mono,22,px+24,py+72,text,ink);
+    std::snprintf(text,sizeof(text),"%s \xC2\xB7 %s \xC2\xB7 %d Mb/s max",d.tenBit()?"HEVC":"H.264",d.hdr()?"HDR":"SDR",d.bitrate_kbps/1000);
+    label(c,Face::mono,22,px+24,py+106,text,ink);
+    label(c,Face::mono,22,px+24,py+140,d.hardware()?"Hardware decoding":"Software decoding",ink);
+    c.roundRect(px+24,py+172,pw-48,2,1,hairline);
+    label(c,Face::extrabold,18,px+24,py+206,"THIS PS5 OUTPUT",dim,0.14f);
+    string_view output(m.output?m.output:"");
+    if(output.rfind("OUTPUT ",0)==0)output.remove_prefix(7);
+    drawWrapped(c,Face::mono,20,px+24,py+224,30,output,pw-48,2,muted);
+    drawWrapped(c,Face::semibold,19,px+24,py+292,26,"The actual stream can differ. The game, your plan and the network decide.",pw-48,2,dim);
+    const char* title;const char* body;Color accent;char status[96];
+    if(dirty&&problem){title="Can\xE2\x80\x99t save yet";body=problem;accent=coral;}
+    else if(dirty&&m.adjusted){std::snprintf(status,sizeof(status),"%u setting%s adjusted",m.adjusted,m.adjusted==1?"":"s");title=status;body="Changed to fit Software decoding. Kept until you Save or Revert.";accent=amber;}
+    else if(dirty){std::snprintf(status,sizeof(status),"%u unsaved change%s",rowCount(dirty),rowCount(dirty)==1?"":"s");title=status;body="Kept until you Save or Revert, even if you leave.";accent=amber;}
+    else if(m.settings.saveError){std::snprintf(status,sizeof(status),"Couldn\xE2\x80\x99t save on this PS5 \xC2\xB7 error %d",m.settings.saveError);title="Not saved";body=status;accent=coral;}
+    else if(m.settings.savedUnavailable){title="Saved choice not qualified";body="It doesn\xE2\x80\x99t work on this PS5 or output now. Using the best available.";accent=amber;}
+    else if(m.settings.loadCorrupt||m.settings.loadUnreadable){title="Saved settings ignored";body="They couldn\xE2\x80\x99t be read. Using the best available.";accent=amber;}
+    else {title=m.settings.saved?"Saved on this PS5":"Best available";body=m.settings.saved?"Used when you press Play.":"Used when you press Play. Not saved yet.";accent=mint;}
+    const float sy=py+ph-24-156;
+    c.roundRect(px+24,sy,pw-48,156,18,raised);
+    c.disc(px+24+24,sy+36,6,accent);
+    drawFitted(c,Face::extrabold,24,px+24+42,baselineIn(Face::extrabold,24,sy+20,32),title,pw-48-60,ink);
+    drawWrapped(c,Face::semibold,20,px+24+20,sy+64,26,body,pw-48-40,3,muted);
+}
+void numberEditor(Canvas& c, const Model& m) {
+    const auto& e=m.edit;
+    const StreamSettings candidate=applyEdit(e,m.draft);
+    const auto error=validateSettings(candidate);
+    c.roundRect(0,0,1920,1080,0,rgb(0x06090C),214);
+    const float x=592, y=232, w=1232, h=560;
+    c.roundRect(x,y,w,h,28,surface);
+    c.roundRectStroke(x,y,w,h,28,2,hairline);
+    const bool resolution=e.row==StreamRow::resolution;
+    const char* title=resolution?"Custom resolution":e.row==StreamRow::fps?"Frame rate":"Bitrate limit";
+    label(c,Face::black,40,x+48,y+66,title,ink);
+    char was[48];
+    if(resolution)std::snprintf(was,sizeof(was),"was %d \xC3\x97 %d",m.draft.width,m.draft.height);
+    else if(e.row==StreamRow::fps)std::snprintf(was,sizeof(was),"was %d FPS",m.draft.fps);
+    else std::snprintf(was,sizeof(was),"was %d Mb/s",m.draft.bitrate_kbps/1000);
+    labelRight(c,Face::mono,20,x+w-48,y+66,was,dim);
+    const auto bad=[&](unsigned from) {
+        if(!resolution)return error!=SettingsError::none;
+        const int v=editNumber(e,from,4);
+        return from==0?(v<320||v>maxWidth(candidate)||(v&1)):(v<180||v>maxHeight(candidate)||(v&1));
+    };
+    const auto group=[&](float gx,const char* name,unsigned from,unsigned count) {
+        const bool wrong=bad(from);
+        label(c,Face::extrabold,18,gx,y+150,name,wrong?coral:dim,0.14f);
+        const float gw=count*92.0f+4;
+        if(wrong)c.roundRectStroke(gx-6,y+172,gw+8,128,22,2,coral);
+        for(unsigned i=0;i<count;++i) {
+            const unsigned index=from+i;
+            const float cx=gx+i*92.0f;
+            const bool active=index==e.cursor;
+            c.roundRect(cx,y+178,84,116,16,raised);
+            if(active) {
+                c.roundRectStroke(cx-2,y+176,88,120,18,4,mint);
+                c.line(cx+32,y+164,cx+42,y+154,3.2f,mint);c.line(cx+42,y+154,cx+52,y+164,3.2f,mint);
+                c.line(cx+32,y+308,cx+42,y+318,3.2f,mint);c.line(cx+42,y+318,cx+52,y+308,3.2f,mint);
+            }
+            const char digit[2]{e.digits[index],0};
+            const float dw=textWidth(Face::black,72,digit);
+            drawText(c,Face::black,72,cx+42-dw/2,baselineIn(Face::black,72,y+178,116),digit,ink);
+        }
+        return gw;
+    };
+    float gx=x+48;
+    if(resolution) {
+        gx+=group(gx,"WIDTH",0,4)+28;
+        label(c,Face::black,56,gx,y+236,"\xC3\x97",dim);
+        group(gx+60,"HEIGHT",4,4);
+    } else group(gx,e.row==StreamRow::fps?"FRAMES PER SECOND":"MEGABITS PER SECOND",0,3);
+    const char* problem=settingsProblem(candidate,true);
+    if(problem){warningIcon(c,x+64,y+374,coral);label(c,Face::extrabold,26,x+92,y+374,problem,coral);}
+    else if(!m.editAvailable){warningIcon(c,x+64,y+374,amber);label(c,Face::extrabold,26,x+92,y+374,"Not qualified for this PS5 and output \xC2\xB7 Save stays off",amber);}
+    else {c.disc(x+64,y+374,8,mint);label(c,Face::extrabold,26,x+92,y+374,"Valid",mint);}
+    const char* range=resolution?(candidate.hardware()?"Width 320 to 3840, height 180 to 2160, both even.":"Software decoding: width 320 to 1920, height 180 to 1080, both even."):
+        e.row==StreamRow::fps?(candidate.hardware()?"Any whole number from 30 to 120.":"Software decoding: 30 to 60."):"Any whole number from 4 to 100.";
+    label(c,Face::semibold,20,x+92,y+410,range,dim);
+    label(c,Face::extrabold,18,x+48,y+464,resolution?"COMMON SIZES \xC2\xB7 L1 / R1":"COMMON VALUES \xC2\xB7 L1 / R1",dim,0.14f);
+    float cx=x+48;
+    char chip[32];
+    const auto drawChip=[&](const char* t){const float cw=textWidth(Face::mono,20,t)+36;c.roundRectStroke(cx,y+486,cw,44,22,2,hairline);label(c,Face::mono,20,cx+18,y+508,t,muted);cx+=cw+10;};
+    if(resolution){for(const auto& size:commonSizes)if(size.width<=maxWidth(candidate)&&size.height<=maxHeight(candidate)){std::snprintf(chip,sizeof(chip),"%d \xC3\x97 %d",size.width,size.height);drawChip(chip);}}
+    else if(e.row==StreamRow::fps){for(int v:commonFps)if(v<=maxFps(candidate)){std::snprintf(chip,sizeof(chip),"%d",v);drawChip(chip);}}
+    else for(int v:commonBitrates){std::snprintf(chip,sizeof(chip),"%d Mb/s",v);drawChip(chip);}
+    const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Pick digit / change"},{HintKind::chord,Glyph::cross,nullptr,resolution?"Common sizes":"Common values"}};
+    const Hint r[]={{HintKind::glyph,Glyph::cross,nullptr,problem?"Done (fix first)":"Done"},{HintKind::glyph,Glyph::circle,nullptr,"Cancel"}};
+    hints(c,l,2,r,2);
+}
+void cachePane(Canvas& c, const Model& m, float x, float w) {
+    const auto& d=m.disk;
+    const double megabytes=double(d.bytes)/(1024.0*1024.0);
+    const bool known=d.available;
+    char big[32],line[128];
+    if(known)std::snprintf(big,sizeof(big),megabytes<10?"%.1f MB":"%.0f MB",megabytes);
+    else std::snprintf(big,sizeof(big),"Unknown");
+    const float bw=drawText(c,Face::black,112,x,baselineIn(Face::black,112,372,112),big,known?ink:muted,-0.03f);
+    std::snprintf(line,sizeof(line),known?"of %zu MB limit":"usage \xC2\xB7 %zu MB limit",art::DiskCache::budgetBytes>>20);
+    label(c,Face::bold,30,x+bw+18,452,line,dim);
+    c.roundRect(x,500,w,12,6,raised);
+    const float fill=std::min(1.0f,float(double(d.bytes)/double(art::DiskCache::budgetBytes)));
+    if(known&&fill>0)c.roundRect(x,500,std::max(12.0f,w*fill),12,6,mint);
+    const char* state=d.error?"Cover art storage reported an error on this PS5":d.busy?"Updating\xE2\x80\xA6":!d.enabled?"Saving is off":"oldest removed first when full";
+    if(known)std::snprintf(line,sizeof(line),"%zu of %u images \xC2\xB7 %s",d.count,art::DiskCache::slots,state);
+    else std::snprintf(line,sizeof(line),"%s \xC2\xB7 saved covers aren\xE2\x80\x99t counted until saving is on",state);
+    label(c,Face::mono,20,x,544,line,d.error?coral:muted);
+    const bool toggleFocus=m.settingsContent&&m.settingsRow==0, clearFocus=m.settingsContent&&m.settingsRow==1;
+    settingsRow(c,x,598,w,92,toggleFocus);
+    label(c,Face::extrabold,26,x+28,630,"Save cover art on this PS5",ink);
+    label(c,Face::semibold,20,x+28,662,"Off keeps covers in memory only. They download again each launch.",dim);
+    const Option o[]={{"Off",!m.artworkWanted,false},{"On",m.artworkWanted,false}};
+    segmented(c,x+w-16,644,o,2);
+    settingsRow(c,x,706,w,92,clearFocus);
+    const bool canClear=m.art&&!d.busy&&(!known||d.count>0);
+    label(c,Face::extrabold,26,x+28,738,"Clear cover art cache",ink);
+    label(c,Face::semibold,20,x+28,770,canClear?(known?"Removes saved images only. You stay signed in and keep your settings.":"Removes any saved images, even while saving is off. You stay signed in."):
+        d.busy?"Busy right now. Try again in a moment.":"Nothing saved to clear.",dim);
+    const float cw=8+36+10+textWidth(Face::black,22,"Clear")+22, cx=x+w-16-cw;
+    c.roundRect(cx,726,cw,52,26,canClear&&clearFocus?mint:raised);
+    c.disc(cx+8+18,752,18,canClear&&clearFocus?rgb(0x0E4A2C):hairline);glyph(c,Glyph::cross,cx+8+18,752,canClear?ink:dim,20);
+    label(c,Face::black,22,cx+8+36+10,752,"Clear",canClear&&clearFocus?mintInk:canClear?ink:dim);
+    if(m.settings.cacheSaveError){std::snprintf(line,sizeof(line),"Couldn\xE2\x80\x99t save this choice on this PS5 \xC2\xB7 error %d",m.settings.cacheSaveError);c.disc(x+34,836,5,coral);label(c,Face::bold,20,x+48,836,line,coral);}
+    else {c.disc(x+34,836,5,mint);label(c,Face::bold,20,x+48,836,"Saved on this PS5 \xC2\xB7 changes apply right away",muted);}
+}
+void clearConfirm(Canvas& c, const Model& m) {
+    c.roundRect(0,0,1920,1080,0,rgb(0x06090C),214);
+    const float x=460, y=250, w=1000, h=530;
+    c.roundRect(x,y,w,h,28,surface);
+    c.roundRectStroke(x,y,w,h,28,2,hairline);
+    char head[64];
+    const bool known=m.disk.available;
+    const double megabytes=double(m.disk.bytes)/(1024.0*1024.0);
+    if(known)std::snprintf(head,sizeof(head),megabytes<10?"Clear %.1f MB of cover art?":"Clear %.0f MB of cover art?",megabytes);
+    else std::snprintf(head,sizeof(head),"Clear saved cover art?");
+    drawFitted(c,Face::black,56,x+52,baselineIn(Face::black,56,y+44,62),head,w-104,ink,-0.02f);
+    label(c,Face::semibold,26,x+52,y+150,"Covers download again the next time you open Library or Browse.",muted);
+    c.roundRect(x+52,y+194,w-104,2,1,hairline);
+    label(c,Face::extrabold,18,x+52,y+232,"REMOVED",coral,0.14f);
+    char removed[48];
+    if(known)std::snprintf(removed,sizeof(removed),"%zu saved cover image%s",m.disk.count,m.disk.count==1?"":"s");
+    else std::snprintf(removed,sizeof(removed),"All saved cover images");
+    label(c,Face::bold,24,x+52,y+272,removed,ink);
+    label(c,Face::extrabold,18,x+520,y+232,"KEPT",mint,0.14f);
+    label(c,Face::bold,24,x+520,y+272,"NVIDIA sign-in",ink);
+    label(c,Face::bold,24,x+520,y+314,"Stream settings",ink);
+    label(c,Face::bold,24,x+520,y+356,"Your Library list",ink);
+    c.roundRect(x+52,y+394,w-104,2,1,hairline);
+    const float bw=button(c,x+52,y+422,Glyph::cross,"Clear cache",true);
+    c.roundRectStroke(x+48,y+418,bw+8,88,44,4,mint);
+    button(c,x+52+bw+20,y+422,Glyph::circle,"Keep",false);
+    const Hint r[]={{HintKind::glyph,Glyph::cross,nullptr,"Clear cache"},{HintKind::glyph,Glyph::circle,nullptr,"Keep"}};
+    hints(c,nullptr,0,r,2);
+}
+void fixedConfirm(Canvas& c, const Model& m) {
+    c.roundRect(0,0,1920,1080,0,rgb(0x06090C),214);
+    const float x=440, y=220, w=1040, h=570;
+    c.roundRect(x,y,w,h,28,surface);
+    c.roundRectStroke(x,y,w,h,28,2,hairline);
+    label(c,Face::extrabold,18,x+52,y+56,"HARDWARE H.264",amber,0.14f);
+    drawWrapped(c,Face::black,50,x+52,y+84,56,"Use fixed-resolution streaming with hardware decoding?",w-104,2,ink);
+    drawWrapped(c,Face::semibold,24,x+52,y+212,34,"Hardware H.264 can\xE2\x80\x99t follow resolution changes during a stream yet, so the cloud must keep one fixed resolution. This only changes the draft; it still needs Save.",w-104,2,muted);
+    c.roundRect(x+52,y+296,w-104,2,1,hairline);
+    const auto change=[&](float ry,const char* key,const char* from,const char* to) {
+        label(c,Face::bold,22,x+52,ry,key,muted);
+        const float fw=label(c,Face::mono,22,x+288,ry,from,dim);
+        const float ax=x+288+fw+16;
+        c.line(ax,ry,ax+20,ry,2.6f,dim);c.line(ax+13,ry-7,ax+20,ry,2.6f,dim);c.line(ax+13,ry+7,ax+20,ry,2.6f,dim);
+        label(c,Face::mono,22,ax+36,ry,to,ink);
+    };
+    change(y+336,"Decoding",m.draft.hardware()?(m.draft.tenBit()?"Hardware HEVC":"Hardware H.264"):"Software","Hardware H.264");
+    change(y+378,"Resolution policy","Adaptive","Fixed");
+    c.roundRect(x+52,y+412,w-104,2,1,hairline);
+    const float bw=button(c,x+52,y+446,Glyph::cross,"Use fixed resolution",true);
+    c.roundRectStroke(x+48,y+442,bw+8,88,44,4,mint);
+    button(c,x+52+bw+20,y+446,Glyph::circle,"Keep current draft",false);
+    const Hint r[]={{HintKind::glyph,Glyph::cross,nullptr,"Use fixed resolution"},{HintKind::glyph,Glyph::circle,nullptr,"Keep current draft"}};
+    hints(c,nullptr,0,r,2);
+}
 void settings(Canvas& c, const Model& m) {
-    const char* panes[]={"Stream","Display & audio","Account","About"};
+    const char* panes[]={"Stream","Display & audio","Cover art & cache","Account","About"};
     for(unsigned i=0;i<settingsPanes;++i) {
         const float y=216+i*80.0f;
         const bool active=i==static_cast<unsigned>(m.pane);
@@ -693,65 +1005,21 @@ void settings(Canvas& c, const Model& m) {
         drawText(c,Face::black,72,x,baselineIn(Face::black,72,214,76),head,ink,-0.02f);
         drawWrapped(c,Face::semibold,26,x,302,36,sub,w,2,muted);
     };
-    char name[48],spec[64];
     if(m.pane==SettingsPane::stream) {
-        title("Stream","Defaults for new sessions on this PS5. You can still pick a profile per game.");
-        const bool rowFocus=m.settingsContent&&m.settingsRow==0;
-        settingsRow(c,x,378,w,176,rowFocus);
-        label(c,Face::extrabold,30,x+32,424,"Default stream profile",ink);
-        const char* status=m.settings.saveError?"Couldn\xE2\x80\x99t save on this PS5 \xC2\xB7 used for this session only":
-            m.settings.savedUnavailable?"Saved profile isn\xE2\x80\x99t qualified here \xC2\xB7 using best available":
-            m.settings.loadCorrupt?"Saved settings were unreadable and were ignored":
-            m.settings.loadUnreadable?"Saved settings couldn\xE2\x80\x99t be read \xC2\xB7 using best available":
-            m.settings.saved?"Used when you press Play. Saved on this PS5.":"Used when you press Play. Best available until you change it.";
-        const Color statusColor=m.settings.saveError?coral:(m.settings.savedUnavailable||m.settings.loadCorrupt||m.settings.loadUnreadable)?amber:muted;
-        drawFitted(c,Face::semibold,22,x+32,baselineIn(Face::semibold,22,448,30),status,w-480,statusColor);
-        if(m.settings.saveError){char code[48];std::snprintf(code,sizeof(code),"error %d",m.settings.saveError);label(c,Face::mono,20,x+32,508,code,coral);}
-        else label(c,Face::mono,22,x+32,508,profileSpec(m.profile,spec,sizeof(spec)),ink);
-        const float sw=356, sx=x+w-32-sw;
-        c.roundRect(sx,410,sw,64,32,rowFocus?mint:raised);
-        const Color sc=rowFocus?mintInk:ink;
-        c.line(sx+38,432,sx+29,442,3,sc);c.line(sx+29,442,sx+38,452,3,sc);
-        c.line(sx+sw-38,432,sx+sw-29,442,3,sc);c.line(sx+sw-29,442,sx+sw-38,452,3,sc);
-        const string_view current=profileName(m.profile,name,sizeof(name));
-        const float nw=std::min(textWidth(Face::black,26,current),sw-120);
-        drawFitted(c,Face::black,26,sx+sw/2-nw/2,baselineIn(Face::black,26,410,64),current,sw-120,sc);
-        StreamProfile options[static_cast<unsigned>(StreamProfile::count)];
-        const unsigned count=availableProfiles(m.profileMask,options,static_cast<unsigned>(StreamProfile::count));
-        unsigned position=0;for(unsigned i=0;i<count;++i)if(options[i]==m.profile)position=i;
-        char of[48];std::snprintf(of,sizeof(of),"%u of %u qualified on this PS5",position+1,count);
-        labelRight(c,Face::bold,20,x+w-32,508,of,dim);
-        label(c,Face::extrabold,20,x+32,598,"QUALIFIED AT STARTUP",dim,0.14f);
-        float cx=x+32, cy=626;
-        for(unsigned i=0;i<count;++i) {
-            const string_view chip=profileName(options[i],name,sizeof(name));
-            const float cw=textWidth(Face::bold,20,chip)+32;
-            if(cx+cw>x+w-32){cx=x+32;cy+=50;}
-            const bool on=options[i]==m.profile;
-            if(on)c.roundRect(cx,cy,cw,40,20,raised);
-            c.roundRectStroke(cx,cy,cw,40,20,2,on?mint:hairline);
-            label(c,Face::bold,20,cx+16,cy+20,chip,on?ink:muted);
-            cx+=cw+10;
-        }
-        drawWrapped(c,Face::semibold,20,x+32,cy+52,28,"Hardware profiles appear only after this PS5 decodes and presents the startup test streams. Software profiles are always available.",w-64,2,dim);
-        const bool resetFocus=m.settingsContent&&m.settingsRow==1;
-        const float ry=std::max(cy+124,820.0f);
-        if(resetFocus)settingsRow(c,x,ry,w,112,true);
-        else c.roundRectStroke(x,ry,w,112,22,2,raised);
-        label(c,Face::extrabold,28,x+32,ry+40,"Reset to best available",ink);
-        label(c,Face::semibold,22,x+32,ry+76,"Forgets the saved default. Your NVIDIA login stays.",muted);
-        const float rw=44+12+textWidth(Face::bold,24,"Reset");
-        well(c,Glyph::cross,x+w-32-rw,ry+56);
-        label(c,Face::bold,24,x+w-32-rw+56,ry+56,"Reset",ink);
+        title("Stream","What OpenNOW asks NVIDIA for. The cloud and this PS5 decide what you actually get.");
+        streamPane(c,m,x);
+    } else if(m.pane==SettingsPane::cache) {
+        title("Cover art & cache",m.artworkWanted?"Covers are saved on this PS5, so Library and Browse open fast after a restart.":"Saving is off, so covers download again after each restart.");
+        cachePane(c,m,x,w);
     } else if(m.pane==SettingsPane::display) {
         title("Display & audio","Reported by this PS5 when OpenNOW starts. Nothing here can be changed.");
         string_view output(m.output?m.output:"");
         if(output.rfind("OUTPUT ",0)==0)output.remove_prefix(7);
         infoRow(c,x,384,w,"Video output",output,"VideoOut mode chosen at startup");
-        const unsigned hevc=profileBit(StreamProfile::native_hdr120)|profileBit(StreamProfile::native_hdr90)|profileBit(StreamProfile::native_hdr60);
-        const unsigned h264=profileBit(StreamProfile::native_4k120)|profileBit(StreamProfile::native_4k90)|profileBit(StreamProfile::native_1080);
-        const char* codecs=(m.profileMask&hevc)&&(m.profileMask&h264)?"HEVC 10-bit \xC2\xB7 H.264":(m.profileMask&hevc)?"HEVC 10-bit":(m.profileMask&h264)?"H.264":"Software decoding only";
-        infoRow(c,x,514,w,"Hardware video",codecs,"Codecs that passed the startup test streams");
+        char codecs[96]{};
+        for(const auto& [on,text]:{std::pair{m.caps.hevcHdr,"HEVC Main10 HDR"},std::pair{m.caps.hevcSdr,"HEVC Main10"},std::pair{m.caps.h264Hardware,"H.264"}})
+            if(on)std::snprintf(codecs+std::strlen(codecs),sizeof(codecs)-std::strlen(codecs),"%s%s",*codecs?" \xC2\xB7 ":"",text);
+        infoRow(c,x,514,w,"Hardware video",*codecs?codecs:"Software decoding only","Modes that passed the startup test streams");
         infoRow(c,x,644,w,"Audio","Opus \xC2\xB7 stereo","Negotiated for every session");
         drawWrapped(c,Face::semibold,22,x+32,790,32,"To change resolution or HDR for the whole console, use the PS5\xE2\x80\x99s own Settings \xE2\x80\xBA Screen and Video, then restart OpenNOW.",w-64,2,muted);
     } else if(m.pane==SettingsPane::account) {
@@ -776,6 +1044,9 @@ void settings(Canvas& c, const Model& m) {
         drawWrapped(c,Face::semibold,22,x+32,584,32,"Built on OpenNOW and OpenNOW-Switch by Open Cloud Gaming. Fonts: Nunito and IBM Plex Mono (SIL OFL 1.1). stb_truetype and stb_image (public domain / MIT). Full notices ship with the app in THIRD_PARTY_NOTICES.",w-64,4,muted);
         drawWrapped(c,Face::semibold,22,x+32,790,32,"Not affiliated with NVIDIA or Sony. GeForce NOW is a trademark of NVIDIA.",w-64,2,dim);
     }
+    if(m.edit.open()){numberEditor(c,m);return;}
+    if(m.confirmClear){clearConfirm(c,m);return;}
+    if(m.confirmFixed){fixedConfirm(c,m);return;}
     if(m.confirmSignOut) {
         c.roundRect(0,0,1920,1080,0,rgb(0x06090C),200);
         c.roundRect(480,300,960,548,32,surface);
@@ -790,10 +1061,20 @@ void settings(Canvas& c, const Model& m) {
         button(c,536+bw+20,714,Glyph::circle,"Cancel",false);
         return;
     }
+    if(m.settingsContent&&m.pane==SettingsPane::stream) {
+        const auto row=static_cast<StreamRow>(m.settingsRow);
+        const bool editable=row==StreamRow::resolution||row==StreamRow::fps||row==StreamRow::bitrate;
+        const bool canSave=changedRows(m.draft,m.defaults)&&!settingsProblem(m.draft,m.draftAvailable);
+        const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move / change"},{HintKind::glyph,Glyph::cross,nullptr,row==StreamRow::reset?"Reset":"Edit"}};
+        const Hint r[]={{canSave?HintKind::optionsMint:HintKind::glyph,Glyph::options,nullptr,"Save"},{HintKind::glyph,Glyph::square,nullptr,"Revert"},back};
+        hints(c,l,editable||row==StreamRow::reset?2:1,r,3);
+        return;
+    }
     if(m.settingsContent) {
-        const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,m.pane==SettingsPane::stream&&m.settingsRow==0?"Move / change":"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Select"}};
+        const bool change=m.pane==SettingsPane::cache&&m.settingsRow==0;
+        const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,change?"Move / change":"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Select"}};
         const Hint r[]={back};
-        hints(c,l,m.pane==SettingsPane::stream&&m.settingsRow==0?1:2,r,1);
+        hints(c,l,2,r,1);
         return;
     }
     const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Open"}};
@@ -882,14 +1163,14 @@ const CloudView& catalogFor(Section section,const CloudView& session,const Cloud
 }
 
 unsigned settingsRows(SettingsPane pane) noexcept {
-    return pane==SettingsPane::stream?2:pane==SettingsPane::account?1:0;
+    return pane==SettingsPane::stream?static_cast<unsigned>(StreamRow::count):pane==SettingsPane::cache?2:pane==SettingsPane::account?1:0;
 }
 
-unsigned availableProfiles(unsigned mask, StreamProfile* out, unsigned capacity) noexcept {
+unsigned qualifiedPresets(StreamProfile* out, unsigned capacity, bool (*available)(const StreamSettings&)) noexcept {
     unsigned count=0;
     StreamProfile p=StreamProfile::native_hdr120;
     for(unsigned i=0;i<static_cast<unsigned>(StreamProfile::count);++i,p=nextProfile(p))
-        if((mask&profileBit(p))&&count<capacity)out[count++]=p;
+        if(available(settingsFor(p))&&count<capacity)out[count++]=p;
     return count;
 }
 

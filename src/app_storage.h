@@ -4,6 +4,7 @@
 #define OPENNOW_STORAGE_ROOT "/download0/opennow"
 #define OPENNOW_ACCOUNT_PATH OPENNOW_STORAGE_ROOT "/account.bin"
 #define OPENNOW_SETTINGS_PATH OPENNOW_STORAGE_ROOT "/settings.bin"
+#define OPENNOW_ARTWORK_CACHE_PATH OPENNOW_STORAGE_ROOT "/artwork"
 #define OPENNOW_LEGACY_ACCOUNT_PATH "/data/opennow/account.bin"
 
 #ifdef __cplusplus

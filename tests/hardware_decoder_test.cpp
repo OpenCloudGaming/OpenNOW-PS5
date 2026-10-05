@@ -118,6 +118,13 @@ int main() {
  }
  failMap=1;assert(!decoder.open(mode));failMap=0;assert(decoder.close());clean();
  failCreate=1;assert(!decoder.open(mode));assert(decoder.error()==-101);failCreate=0;clean();
+ assert(decoder.open(*nativeMode(NativeCodec::h264,3840,2160,120)));
+ const auto customAvc=*nativeMode(NativeCodec::h264,1440,1080,47);
+ assert(decoder.expectOutput(customAvc));outputWidth=1440;
+ assert(decoder.decode(au,sizeof(au),0,picture)==HardwareDecoder::Result::picture);
+ assert(picture.mode.visible_width==1440&&picture.mode.visible_height==1080&&picture.mode.fps==47);
+ assert(picture.surface.pitch_components==3840&&picture.surface.height==2176);
+ assert(decoder.release(picture)&&decoder.close());clean();outputWidth=0;
  queriedDepths.clear();
  for(auto codec:{NativeCodec::hevc_main10,NativeCodec::h264}){
   const auto ninety=*nativeMode(codec,3840,2160,90);assert(decoder.open(ninety));
@@ -150,6 +157,7 @@ int main() {
  outputWidth=outputHeight=outputPitch=0;
  assert(decoder.close());clean();
  const auto hdr=*nativeMode(NativeCodec::hevc_main10,3840,2160,120);
+ const auto main10Sdr=*nativeMode(NativeCodec::hevc_main10_sdr,3840,2160,120);
  // Query support is not creation support; both failure stages clean up.
  for(unsigned refusal:{0u,1u,2u}){
   queriedDepths.clear();createdDepths.clear();
@@ -164,6 +172,12 @@ int main() {
   assert(!decoder.probePipelineCreation(hdr)&&queriedDepths.size()==activeQueries);
   assert(decoder.close());clean();
  }
+ allowDeepQuery=true;refuseDeepCreate=false;
+ assert(decoder.probePipelineCreation(main10Sdr));clean();
+ assert(decoder.openForQualification(main10Sdr,3)&&decoder.timing().pipeline_depth==3);
+ assert(decoder.close());clean();
+ assert(decoder.open(main10Sdr)&&decoder.timing().pipeline_depth==1);
+ assert(decoder.close());clean();
  // Failure to delete a candidate preserves mapped memory and its handle.
  allowDeepQuery=true;refuseDeepCreate=false;failDelete=1;
  assert(!decoder.probePipelineCreation(hdr)&&decoders==1&&!allocations.empty());
@@ -171,8 +185,8 @@ int main() {
  failDelete=0;assert(decoder.close());clean();allowDeepQuery=false;
  // Distinct compressed inputs survive delayed GPU/worker consumption.
  // Geometry, color mode and timestamps follow the returned submission.
- allowDeepQuery=true;assert(HardwareDecoder::setQualifiedMain10Depth(3));
- assert(!HardwareDecoder::setQualifiedMain10Depth(4));
+ allowDeepQuery=true;assert(HardwareDecoder::setQualifiedMain10Depth(hdr,3));
+ assert(!HardwareDecoder::setQualifiedMain10Depth(hdr,4));
  assert(decoder.open(hdr)&&decoder.timing().pipeline_depth==3);
  for(unsigned n=0;n<6;++n){
   if(n==1){assert(decoder.expectOutput(resized));outputWidth=2880;}
@@ -204,14 +218,41 @@ int main() {
  assert(decoder.decode(au,sizeof(au),10,picture)==HardwareDecoder::Result::picture);
  assert(picture.mode.full_range&&!picture.mode.hdr&&decoder.release(picture));
  assert(decoder.close());clean();outputWidth=0;
- assert(HardwareDecoder::setQualifiedMain10Depth(3));refuseDeepCreate=true;
+ assert(HardwareDecoder::setQualifiedMain10Depth(hdr,3));refuseDeepCreate=true;
  assert(decoder.open(hdr)&&decoder.timing().pipeline_depth==1);
  refuseDeepCreate=false;assert(decoder.close());clean();
+ assert(decoder.open(hdr)&&decoder.timing().pipeline_depth==1);assert(decoder.close());clean();
+ assert(HardwareDecoder::setQualifiedMain10Depth(hdr,3));
  assert(decoder.open(hdr));failDeepDecode=true;
  assert(decoder.decode(au,sizeof(au),11,picture)==HardwareDecoder::Result::error);failDeepDecode=false;
  assert(decoder.fallbackToClassic()&&decoder.timing().pipeline_depth==1);
  assert(decoder.close());clean();allowDeepQuery=false;
- assert(HardwareDecoder::setQualifiedMain10Depth(1));
+ assert(HardwareDecoder::setQualifiedMain10Depth(hdr,1));
+ allowDeepQuery=true;
+ assert(HardwareDecoder::setQualifiedMain10Depth(hdr,3));
+ assert(decoder.open(main10Sdr)&&decoder.timing().pipeline_depth==1);assert(decoder.close());clean();
+ assert(HardwareDecoder::setQualifiedMain10Depth(main10Sdr,2));
+ assert(!HardwareDecoder::setQualifiedMain10Depth(mode,3));
+ assert(decoder.open(main10Sdr)&&decoder.timing().pipeline_depth==2);
+ assert(decoder.decode(au,sizeof(au),0,picture)==HardwareDecoder::Result::no_picture);
+ assert(decoder.decode(au,sizeof(au),1,picture)==HardwareDecoder::Result::picture);
+ assert(!picture.mode.hdr&&picture.mode.codec==NativeCodec::hevc_main10_sdr&&picture.pts==0);
+ assert(decoder.release(picture));
+ failDeepFlush=true;assert(decoder.drain(picture)==HardwareDecoder::Result::error);failDeepFlush=false;
+ assert(decoder.fallbackToClassic()&&decoder.timing().pipeline_depth==1);assert(decoder.close());clean();
+ assert(decoder.open(hdr)&&decoder.timing().pipeline_depth==3);assert(decoder.close());clean();
+ assert(decoder.open(main10Sdr)&&decoder.timing().pipeline_depth==1);assert(decoder.close());clean();
+ assert(HardwareDecoder::setQualifiedMain10Depth(main10Sdr,2));
+ assert(decoder.open(hdr)&&decoder.timing().pipeline_depth==3);
+ assert(decoder.fallbackToClassic()&&decoder.timing().pipeline_depth==1);assert(decoder.close());clean();
+ assert(decoder.open(main10Sdr)&&decoder.timing().pipeline_depth==2);assert(decoder.close());clean();
+ assert(HardwareDecoder::setQualifiedMain10Depth(hdr,3));
+ refuseDeepCreate=true;assert(decoder.open(main10Sdr)&&decoder.timing().pipeline_depth==1);refuseDeepCreate=false;
+ assert(decoder.close());clean();
+ assert(decoder.open(hdr)&&decoder.timing().pipeline_depth==3);assert(decoder.close());clean();
+ assert(decoder.open(main10Sdr)&&decoder.timing().pipeline_depth==1);assert(decoder.close());clean();
+ assert(HardwareDecoder::setQualifiedMain10Depth(hdr,1)&&HardwareDecoder::setQualifiedMain10Depth(main10Sdr,1));
+ allowDeepQuery=false;
  assert(decoder.open(mode));
  assert(lastConfig.maxDpbFrames==4);
  assert(decoder.decode(au,sizeof(au),0,picture)==HardwareDecoder::Result::picture);

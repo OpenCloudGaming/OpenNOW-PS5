@@ -14,6 +14,7 @@ bool inPoll = false, inLoop = false, dropSocket = false;
 bool mediaStarts = true, peerStarts = true, socketStarts = true, entropyWorks = true;
 bool assemblerReady = true, nullAnswer = false;
 bool mediaRunning = false;
+opennow::StreamSettings mediaSettings;
 int runtimeResult = 0;
 PeerConnectionState nextState = PEER_CONNECTION_NEW;
 std::string incoming;
@@ -93,7 +94,7 @@ void WebSocketClient::poll() {
 }
 
 namespace opennow {
-bool Media::start(const StreamSettings&) noexcept { frames = 0; mediaRunning = mediaStarts; return mediaStarts; }
+bool Media::start(const StreamSettings& settings) noexcept { mediaSettings=settings;frames = 0; mediaRunning = mediaStarts; return mediaStarts; }
 void Media::stop() noexcept { mediaRunning = false; }
 void Media::requireKeyframe() noexcept {}
 bool Media::video(const std::uint8_t*, std::size_t) noexcept { return true; }
@@ -176,6 +177,13 @@ int main() {
         clean();
     }
     socketStarts=true;
+    launch.settings={1440,1080,47,32000,opennow::VideoMode::h264Hardware,opennow::QualityMode::clarity,opennow::NetworkPolicy::fixed};
+    const auto expectedSettings=launch.settings;
+    assert(stream.start(launch,"test")&&mediaSettings==expectedSettings);
+    launch.settings={};outbound.clear();queuePayload("sdp",answer);stream.tick(1000000);
+    assert(std::any_of(outbound.begin(),outbound.end(),[](const auto& text){return text.find("a=video.maxFPS:47")!=std::string::npos&&text.find("a=video.clientViewportWd:1440")!=std::string::npos;}));
+    stream.stop();clean();
+    launch.settings.fps=240;assert(!stream.start(launch,"test")&&stream.failed());clean();launch.settings={};
     assert(stream.start(launch, "test"));
     assert(!stream.failed());
     dropSocket = true;
@@ -221,14 +229,14 @@ int main() {
     assert(stream.failed());
     clean();
 
-    launch.profile = opennow::StreamProfile::native_hdr60;
+    launch.settings = opennow::settingsFor(opennow::StreamProfile::native_hdr60);
     assert(stream.start(launch, "test"));
     queuePayload("sdp", answer);
     stream.tick(1000000);
     assert(std::strstr(stream.status(), "selected video codec"));
     assert(stream.failed());
     clean();
-    launch.profile = opennow::StreamProfile::quality;
+    launch.settings = opennow::settingsFor(opennow::StreamProfile::quality);
 
     for (bool* option : {&mediaStarts, &peerStarts, &socketStarts, &entropyWorks, &assemblerReady}) {
         *option = false;

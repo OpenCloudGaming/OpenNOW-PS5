@@ -164,7 +164,7 @@ int SelectOfferH264PayloadType(const std::string& offer_sdp)
     return h264_payloads.empty() ? 0 : h264_payloads.front();
 }
 
-int SelectOfferHevcPayloadType(const std::string& offer_sdp,bool hdr)
+int SelectOfferHevcPayloadType(const std::string& offer_sdp,bool tenBit)
 {
     const auto lines=SplitSdpLines(offer_sdp);bool video=false;
     for(const auto& line:lines){
@@ -177,7 +177,7 @@ int SelectOfferHevcPayloadType(const std::string& offer_sdp,bool hdr)
         const auto don=fmtp.find("sprop-max-don-diff=");
         if(don!=std::string::npos&&std::strtol(fmtp.c_str()+don+19,nullptr,10)!=0)continue;
         const auto profile=fmtp.find("profile-id=");
-        if(hdr&&profile!=std::string::npos&&std::strtol(fmtp.c_str()+profile+11,nullptr,10)!=2)continue;
+        if(profile!=std::string::npos&&std::strtol(fmtp.c_str()+profile+11,nullptr,10)!=(tenBit?2:1))continue;
         return pt;
     }
     return 0;
@@ -349,11 +349,13 @@ std::string AdaptAnswerSdpToOffer(
     const std::string& offer_sdp,
     const opennow::StreamSettings& settings)
 {
-    const bool hevc=settings.codec==VideoCodec::hevc;
-    const int h264_payload_type = hevc?SelectOfferHevcPayloadType(offer_sdp,settings.hdr):SelectOfferH264PayloadType(offer_sdp);
+    const bool hevc=settings.codec()==VideoCodec::hevc;
+    const int h264_payload_type = hevc?SelectOfferHevcPayloadType(offer_sdp,settings.tenBit()):SelectOfferH264PayloadType(offer_sdp);
     if(!h264_payload_type)return {};
     const std::vector<std::string> offer_lines = SplitSdpLines(offer_sdp);
-    const std::string offer_h264_fmtp = FindFmtpForPayload(offer_lines, h264_payload_type);
+    std::string offer_h264_fmtp = FindFmtpForPayload(offer_lines, h264_payload_type);
+    if(hevc&&!offer_h264_fmtp.empty()&&offer_h264_fmtp.find("profile-id=")==std::string::npos)
+        offer_h264_fmtp+=";profile-id="+std::to_string(settings.tenBit()?2:1);
     const std::vector<std::string> offer_h264_feedback = FindRtcpFbForPayload(offer_lines, h264_payload_type);
     std::string offer_audio_red_rtpmap;
     std::string offer_audio_red_fmtp;

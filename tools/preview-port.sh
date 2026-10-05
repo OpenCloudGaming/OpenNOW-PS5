@@ -23,9 +23,11 @@ for path in "${covers[@]}"; do
 done
 scenes=(signin-idle signin-requesting signin-code signin-failed library library-art-loading library-loading library-scanning library-empty library-error
     library-page-error browse browse-row2 browse-long browse-loading-more search detail detail-hardware settings
-    settings-stream settings-save-error settings-display settings-account settings-signout settings-about starting
+    settings-stream settings-stream-custom settings-stream-software settings-stream-editor settings-stream-unqualified settings-stream-fixed
+    settings-save-error settings-display settings-cache settings-cache-clear settings-cache-off settings-account settings-signout settings-about starting
     queued connecting keyboard keyboard-modifiers keyboard-waiting cleanup-failed stream-ended launch-failed)
 for scene in "${scenes[@]}"; do
+    rm -rf build/preview-cache
     OPENNOW_PREVIEW_SCENE=$scene build/host-tests/preview
     if command -v sips >/dev/null; then
         sips -s format png build/preview.ppm --out "build/preview/$scene.png" >/dev/null

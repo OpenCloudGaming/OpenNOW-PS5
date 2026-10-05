@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "artwork.hpp"
+#include "artwork_disk.hpp"
 #include "../cloud.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
@@ -85,15 +87,54 @@ bool decode(const unsigned char* data,std::size_t size,unsigned width,unsigned h
     return true;
 }
 
-Cache::Cache(Fetch fetch,void* context) noexcept:fetch_(fetch),context_(context) {
+Cache::Cache(Fetch fetch,void* context,const char* diskRoot) noexcept:fetch_(fetch),context_(context) {
     scratch_=static_cast<std::uint32_t*>(std::malloc(pixelsOf(Kind::hero)*4));
     compressed_=static_cast<unsigned char*>(std::malloc(maxCompressedBytes));
+    if(diskRoot) {
+        disk_=new(std::nothrow) DiskCache(diskRoot);
+        diskStats_.enabled=true;diskStats_.busy=true;
+        diskStats_.error=!disk_||!disk_->configured();
+        diskInitialize_=true;
+    }
 }
 
 Cache::~Cache() {
     for(auto& slot:slots_)std::free(slot.pixels);
     std::free(scratch_);
     std::free(compressed_);
+    delete disk_;
+    pthread_mutex_destroy(&mutex_);
+}
+
+void Cache::setDiskEnabled(bool enabled) noexcept {
+    pthread_mutex_lock(&mutex_);
+    if(enabled&&!diskStats_.enabled&&disk_)diskInitialize_=true;
+    diskStats_.enabled=enabled&&disk_;
+    if(diskInitialize_&&diskStats_.enabled)diskStats_.busy=true;
+    pthread_mutex_unlock(&mutex_);
+}
+
+void Cache::requestDiskClear() noexcept {
+    pthread_mutex_lock(&mutex_);
+    ++clearRequested_;diskStats_.busy=true;cancel_.store(true);
+    pthread_mutex_unlock(&mutex_);
+}
+
+DiskStats Cache::diskStats() const noexcept {
+    pthread_mutex_lock(&mutex_);
+    const auto stats=diskStats_;
+    pthread_mutex_unlock(&mutex_);
+    return stats;
+}
+
+void Cache::publishDiskStats() noexcept {
+    pthread_mutex_lock(&mutex_);
+    if(disk_) {
+        diskStats_.available=disk_->available();diskStats_.error=disk_->error();
+        diskStats_.bytes=disk_->bytes();diskStats_.count=disk_->count();
+    }
+    diskStats_.busy=clearRequested_!=cleared_||(diskInitialize_&&diskStats_.enabled);
+    pthread_mutex_unlock(&mutex_);
 }
 
 Cache::Slot* Cache::find(const char* artwork,Kind kind) noexcept {
@@ -104,6 +145,7 @@ Cache::Slot* Cache::find(const char* artwork,Kind kind) noexcept {
 State Cache::want(const char* artwork,Kind kind,unsigned frame) noexcept {
     if(!artworkUrl(artwork)||std::strlen(artwork)>=sizeof(Slot::url))return State::failed;
     pthread_mutex_lock(&mutex_);
+    if(clearRequested_!=cleared_){pthread_mutex_unlock(&mutex_);return State::loading;}
     Slot* slot=find(artwork,kind);
     if(!slot) {
         const unsigned first=kind==Kind::tile?0:tileSlots, last=kind==Kind::tile?tileSlots:tileSlots+heroSlots;
@@ -126,7 +168,7 @@ State Cache::want(const char* artwork,Kind kind,unsigned frame) noexcept {
 bool Cache::draw(ps5::demo::Canvas& canvas,const char* artwork,Kind kind,float x,float y,float radius,unsigned alpha) noexcept {
     pthread_mutex_lock(&mutex_);
     const Slot* slot=find(artwork,kind);
-    const bool shown=slot&&slot->state==State::ready&&slot->pixels;
+    const bool shown=clearRequested_==cleared_&&slot&&slot->state==State::ready&&slot->pixels;
     if(shown)canvas.imageRounded(static_cast<int>(std::lround(x)),static_cast<int>(std::lround(y)),widthOf(kind),heightOf(kind),slot->pixels,radius,alpha);
     pthread_mutex_unlock(&mutex_);
     return shown;
@@ -136,46 +178,89 @@ bool Cache::drawHero(ps5::demo::Canvas& canvas,const char* artwork,int x,int y,u
                      const std::uint8_t* columnAlpha,const std::uint8_t* rowAlpha) noexcept {
     pthread_mutex_lock(&mutex_);
     const Slot* slot=find(artwork,Kind::hero);
-    const bool shown=slot&&slot->state==State::ready&&slot->pixels;
+    const bool shown=clearRequested_==cleared_&&slot&&slot->state==State::ready&&slot->pixels;
     if(shown)canvas.imageFaded(x,y,width,height,slot->pixels,heroWidth,heroHeight,columnAlpha,rowAlpha);
     pthread_mutex_unlock(&mutex_);
     return shown;
 }
 
 bool Cache::step() noexcept {
-    if(!ready()||stop_.load()||paused_.load())return false;
+    if(!ready()||stop_.load())return false;
+    pthread_mutex_lock(&mutex_);
+    const auto clear=clearRequested_;
+    const bool clearing=clear!=cleared_;
+    const bool initialize=diskInitialize_&&(diskStats_.enabled||clearing);
+    if(initialize) {
+        diskInitialize_=false;
+        for(auto& slot:slots_)if(slot.state==State::failed)slot.state=State::loading;
+    }
+    if(clearing) {
+        for(auto& slot:slots_){std::free(slot.pixels);slot={};}
+    }
+    if(clearing||initialize)diskStats_.busy=true;
+    pthread_mutex_unlock(&mutex_);
+    if(initialize&&disk_)disk_->initialize(compressed_,maxCompressedBytes);
+    if(clearing) {
+        if(disk_)disk_->clear();
+        pthread_mutex_lock(&mutex_);cleared_=clear;pthread_mutex_unlock(&mutex_);
+        generation_.fetch_add(1);
+    }
+    publishDiskStats();
+    if(clearing)return true;
+    if(paused_.load())return initialize;
     char artwork[sizeof(Slot::url)]{};
     Kind kind=Kind::tile;
     pthread_mutex_lock(&mutex_);
+    if(clearRequested_!=cleared_){pthread_mutex_unlock(&mutex_);return true;}
     Slot* chosen=nullptr;
     for(auto& slot:slots_)
         if(slot.state==State::loading&&!slot.fetching&&(!chosen||slot.lastUsed>chosen->lastUsed))chosen=&slot;
-    if(chosen){chosen->fetching=true;std::memcpy(artwork,chosen->url,sizeof(artwork));kind=chosen->kind;}
+    const bool diskEnabled=diskStats_.enabled;
+    if(chosen) {
+        chosen->fetching=true;std::memcpy(artwork,chosen->url,sizeof(artwork));kind=chosen->kind;
+        cancel_.store(false);diskStats_.busy=diskEnabled;
+    }
     pthread_mutex_unlock(&mutex_);
-    if(!chosen)return false;
-    cancel_.store(false);
+    if(!chosen)return initialize;
     if(stop_.load()||paused_.load()) {
         cancel_.store(true);
         pthread_mutex_lock(&mutex_);
         chosen->fetching=false;
         pthread_mutex_unlock(&mutex_);
+        publishDiskStats();
         return false;
     }
     char url[256];
     std::size_t size=0;
-    bool ok=requestUrl(artwork,kind,url,sizeof(url))&&
-        fetch_(context_,url,compressed_,maxCompressedBytes,size,cancel_)&&
-        decode(compressed_,size,widthOf(kind),heightOf(kind),scratch_);
+    const bool validUrl=requestUrl(artwork,kind,url,sizeof(url));
+    bool ok=false;
+    if(validUrl&&diskEnabled&&disk_&&!cancel_.load()) {
+        if(disk_->get(url,static_cast<unsigned>(kind),compressed_,maxCompressedBytes,size)) {
+            ok=decode(compressed_,size,widthOf(kind),heightOf(kind),scratch_);
+            if(!ok)disk_->discard(url,static_cast<unsigned>(kind));
+        }
+    }
+    if(!ok&&validUrl&&!cancel_.load()) {
+        ok=fetch_(context_,url,compressed_,maxCompressedBytes,size,cancel_)&&
+            decode(compressed_,size,widthOf(kind),heightOf(kind),scratch_);
+        pthread_mutex_lock(&mutex_);
+        const bool persist=diskStats_.enabled&&clearRequested_==cleared_&&!cancel_.load();
+        pthread_mutex_unlock(&mutex_);
+        if(ok&&persist&&disk_)disk_->put(url,static_cast<unsigned>(kind),compressed_,size);
+    }
     pthread_mutex_lock(&mutex_);
     if(chosen->fetching&&chosen->kind==kind&&!std::strcmp(chosen->url,artwork)) {
         chosen->fetching=false;
-        if(!ok&&cancel_.load()&&!stop_.load()){pthread_mutex_unlock(&mutex_);return true;}
+        if(clearRequested_!=cleared_||(!ok&&cancel_.load()&&!stop_.load())) {
+            pthread_mutex_unlock(&mutex_);publishDiskStats();return true;
+        }
         if(ok&&!chosen->pixels)chosen->pixels=static_cast<std::uint32_t*>(std::malloc(pixelsOf(kind)*4));
         ok=ok&&chosen->pixels;
         if(ok)std::memcpy(chosen->pixels,scratch_,pixelsOf(kind)*4);
         chosen->state=ok?State::ready:State::failed;
     }
     pthread_mutex_unlock(&mutex_);
+    publishDiskStats();
     generation_.fetch_add(1);
     return true;
 }
