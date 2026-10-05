@@ -43,10 +43,11 @@ ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined
 build/host-tests/stream-settings-test
 ${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -Isrc -Itests/stubs "${link_flags[@]}" tests/gpu_viewport_test.cpp -o build/host-tests/gpu-viewport-test
 build/host-tests/gpu-viewport-test
+python3 tests/gpu_shader_test.py
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/nvst_sdp_test.cpp src/stream/nvst_sdp.cpp src/stream/sdp.cpp -o build/host-tests/nvst-sdp-test
 build/host-tests/nvst-sdp-test
-${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -Wno-misleading-indentation -O1 -g -fsanitize=address,undefined -Isrc -Ivendor/libpeer/src tests/stream_lifecycle_test.cpp src/stream/stream.cpp src/stream/sdp.cpp src/stream/nvst_sdp.cpp build/host-tests/cJSON.o -o build/host-tests/stream-lifecycle-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -Wno-misleading-indentation -O1 -g -fsanitize=address,undefined -Isrc -Ivendor/libpeer/src tests/stream_lifecycle_test.cpp src/stream/stream.cpp src/stream/sdp.cpp src/stream/nvst_sdp.cpp src/stream/audio_receiver.cpp build/host-tests/cJSON.o -lopus -pthread -o build/host-tests/stream-lifecycle-test
 build/host-tests/stream-lifecycle-test
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc/stream tests/websocket_write_queue_test.cpp -o build/host-tests/websocket-queue-test
 build/host-tests/websocket-queue-test
@@ -54,6 +55,14 @@ bash tools/test-websocket.sh
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/audio_rtp_utils_test.cpp -o build/host-tests/audio-rtp-test
 build/host-tests/audio-rtp-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/audio_receiver_test.cpp src/stream/audio_receiver.cpp -lopus -pthread -o build/host-tests/audio-receiver-test
+build/host-tests/audio-receiver-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/audio_output_test.cpp -pthread -o build/host-tests/audio-output-test
+build/host-tests/audio-output-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/audio_negotiation_test.cpp src/stream/sdp.cpp src/stream/nvst_sdp.cpp -o build/host-tests/audio-negotiation-test
+build/host-tests/audio-negotiation-test
+${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -DLOG_LEVEL=-1 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -Ivendor/libpeer/src tests/peer_audio_routing_test.c vendor/libpeer/src/rtp.c "${link_flags[@]}" -o build/host-tests/peer-audio-routing-test
+build/host-tests/peer-audio-routing-test
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Ivendor/libpeer/src tests/rtp_layout_test.c -o build/host-tests/rtp-layout-test
 build/host-tests/rtp-layout-test
 for test in rtp_h264_assembly_test rtp_hevc_assembly_test rtp_reorder_test; do

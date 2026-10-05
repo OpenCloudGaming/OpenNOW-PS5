@@ -119,8 +119,10 @@ int ExtractRtpmapPayloadType(const std::string& line, const char* codec)
 std::string FindFmtpForPayload(const std::vector<std::string>& lines, int payload_type)
 {
     const std::string prefix = "a=fmtp:" + std::to_string(payload_type) + " ";
+    bool video=false;
     for (const auto& line : lines) {
-        if (StartsWithString(line, prefix))
+        if(StartsWithString(line,"m="))video=StartsWithString(line,"m=video ");
+        if (video&&StartsWithString(line, prefix))
             return line;
     }
     return "";
@@ -130,8 +132,10 @@ std::vector<std::string> FindRtcpFbForPayload(const std::vector<std::string>& li
 {
     std::vector<std::string> feedback;
     const std::string prefix = "a=rtcp-fb:" + std::to_string(payload_type) + " ";
+    bool video=false;
     for (const auto& line : lines) {
-        if (line == prefix + "nack" || line == prefix + "nack pli")
+        if(StartsWithString(line,"m="))video=StartsWithString(line,"m=video ");
+        if (video&&(line == prefix + "nack" || line == prefix + "nack pli"))
             feedback.push_back(line);
     }
     return feedback;
@@ -347,8 +351,11 @@ std::string AlignAnswerSdpToOffer(const std::string& answer_sdp, const std::stri
 std::string AdaptAnswerSdpToOffer(
     const std::string& answer_sdp,
     const std::string& offer_sdp,
-    const opennow::StreamSettings& settings)
+    const opennow::StreamSettings& settings,const audio::Format* selectedAudio)
 {
+    if(CountSdpLinesWithPrefix(offer_sdp,"m=video ")!=1||
+       CountSdpLinesWithPrefix(answer_sdp,"m=video ")!=1||
+       CountSdpLinesWithPrefix(offer_sdp,"m=audio ")>1)return {};
     const bool hevc=settings.codec()==VideoCodec::hevc;
     const int h264_payload_type = hevc?SelectOfferHevcPayloadType(offer_sdp,settings.tenBit()):SelectOfferH264PayloadType(offer_sdp);
     if(!h264_payload_type)return {};
@@ -357,45 +364,36 @@ std::string AdaptAnswerSdpToOffer(
     if(hevc&&!offer_h264_fmtp.empty()&&offer_h264_fmtp.find("profile-id=")==std::string::npos)
         offer_h264_fmtp+=";profile-id="+std::to_string(settings.tenBit()?2:1);
     const std::vector<std::string> offer_h264_feedback = FindRtcpFbForPayload(offer_lines, h264_payload_type);
-    std::string offer_audio_red_rtpmap;
-    std::string offer_audio_red_fmtp;
-    bool offer_in_audio = false;
-    for (const auto& line : offer_lines) {
-        if (StartsWithString(line, "m=")) {
-            offer_in_audio = StartsWithString(line, "m=audio");
-            continue;
-        }
-        if (!offer_in_audio)
-            continue;
-        if (StartsWithString(line, "a=rtpmap:63 ") &&
-            (line.find("red/48000") != std::string::npos ||
-             line.find("RED/48000") != std::string::npos)) {
-            offer_audio_red_rtpmap = line;
-        } else if (StartsWithString(line, "a=fmtp:63 ")) {
-            offer_audio_red_fmtp = line;
-        }
-    }
+    const bool offerHasAudio=CountSdpLinesWithPrefix(offer_sdp,"m=audio ")!=0;
+    const auto audioFormat=selectedAudio?*selectedAudio:audio::selectFormat(offer_sdp,2);
+    if(offerHasAudio&&!audio::validFormat(audioFormat))return {};
     std::vector<std::string> lines = SplitSdpLines(answer_sdp);
     std::vector<std::string> out;
     bool in_video = false;
     bool in_audio = false;
     bool video_bitrate_added = false;
     bool video_feedback_added = false;
-    bool audio_red_added = false;
+    unsigned audioSections=0;
+    const auto appendAudio=[&]{
+        out.push_back(audioFormat.rtpmap);
+        out.push_back("a=fmtp:"+std::to_string(audioFormat.payload)+" "+audioFormat.fmtp);
+        if(audioFormat.redPayload>=0){out.push_back(audioFormat.redRtpmap);out.push_back(audioFormat.redFmtp);}
+    };
 
     const std::string payload = std::to_string(h264_payload_type);
 
     for (const auto& line : lines) {
         if (StartsWithString(line, "m=")) {
+            if(in_audio)appendAudio();
             in_video = StartsWithString(line, "m=video");
             in_audio = StartsWithString(line, "m=audio");
             if (in_video) {
                 out.push_back("m=video 9 UDP/TLS/RTP/SAVPF " + payload);
                 continue;
             } else if (in_audio) {
-                out.push_back(offer_audio_red_rtpmap.empty()
-                    ? "m=audio 9 UDP/TLS/RTP/SAVPF 111"
-                    : "m=audio 9 UDP/TLS/RTP/SAVPF 111 63");
+                if(!offerHasAudio||++audioSections>1)return {};
+                out.push_back("m=audio 9 UDP/TLS/RTP/SAVPF "+std::to_string(audioFormat.payload)+
+                    (audioFormat.redPayload>=0?" "+std::to_string(audioFormat.redPayload):""));
                 continue;
             } else if (StartsWithString(line, "m=application")) {
                 out.push_back("m=application 9 UDP/DTLS/SCTP webrtc-datachannel");
@@ -403,19 +401,7 @@ std::string AdaptAnswerSdpToOffer(
             }
         }
 
-        if (in_audio && !audio_red_added && StartsWithString(line, "a=rtpmap:111")) {
-            out.push_back(line);
-            out.push_back("a=fmtp:111 minptime=10;stereo=1;sprop-stereo=1;maxaveragebitrate=256000");
-            if (!offer_audio_red_rtpmap.empty()) {
-                out.push_back(offer_audio_red_rtpmap);
-                if (!offer_audio_red_fmtp.empty())
-                    out.push_back(offer_audio_red_fmtp);
-            }
-            audio_red_added = true;
-            continue;
-        }
-
-        if (in_audio && StartsWithString(line, "a=fmtp:111"))
+        if (in_audio && (StartsWithString(line,"a=rtpmap:")||StartsWithString(line,"a=fmtp:")||StartsWithString(line,"a=rtcp-fb:")))
             continue;
 
         if (in_video && StartsWithString(line, "c=IN ")) {
@@ -462,6 +448,8 @@ std::string AdaptAnswerSdpToOffer(
 
         out.push_back(line);
     }
+    if(in_audio)appendAudio();
+    if(offerHasAudio&&!audioSections)return {};
 
     if (!video_bitrate_added) {
         for (size_t i = 0; i < out.size(); ++i) {

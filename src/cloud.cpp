@@ -202,28 +202,30 @@ bool Cloud::fetchPage(CatalogSource source,unsigned page,const char* jwt,const c
 }
 void Cloud::select(int delta) noexcept {if(view_.state!=CloudState::catalog||!view_.count)return;view_.selected=(view_.selected+view_.count+delta)%view_.count;}
 void Cloud::focus(unsigned index) noexcept {if(view_.state==CloudState::catalog&&index<view_.count)view_.selected=index;}
-void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept {
+void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels) noexcept {
     if(view_.state!=CloudState::catalog||view_.selected>=view_.count||*session_.id)return;
-    start(view_.games[view_.selected],jwt,device,now,settings);
+    start(view_.games[view_.selected],jwt,device,now,settings,audioChannels);
 }
-void Cloud::launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept {
+void Cloud::launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels) noexcept {
     const CloudView& entries=source==CatalogSource::library?library_:view_;
     if(entries.state!=CloudState::catalog||index>=entries.count)return;
     if(source==CatalogSource::browse)view_.selected=index;
     const Game game=entries.games[index];
-    start(game,jwt,device,now,settings);
+    start(game,jwt,device,now,settings,audioChannels);
 }
 void Cloud::dismissLaunchError() noexcept {
     if(*session_.id||!view_.launchError)return;
     view_.launchError=false;view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");
 }
-void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& requested) noexcept {
+void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& requested,unsigned audioChannels) noexcept {
     if(*session_.id||view_.state==CloudState::starting||view_.state==CloudState::queued||view_.state==CloudState::ready)return;
     view_.current=game;view_.launchError=false;
     for(const char* digit=game.id;*digit;++digit)if(*digit<'0'||*digit>'9'){failLaunch("Catalog variant has no numeric launch ID");return;}
     const StreamSettings settings=requested;
     if(validateSettings(settings)!=SettingsError::none){failLaunch("Invalid stream settings");return;}
+    if((audioChannels!=2&&audioChannels!=6&&audioChannels!=8)||audio::requestedChannels(settings.audio_mode,audioChannels)!=audioChannels){failLaunch("Invalid audio channel request");return;}
     session_.settings=settings;
+    session_.audioChannels=audioChannels;
     char netId[128]{},netUrl[768],netBody[256];
     std::snprintf(netUrl,sizeof(netUrl),"%sv2/nettestsession",base_);
     std::snprintf(netBody,sizeof(netBody),
@@ -248,10 +250,12 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
     auto* features=cJSON_AddObjectToObject(req,"requestedStreamingFeatures");
     for(auto* key:{"reflex","cloudGsync","enabledL4S","trueHdr","fallbackToLogicalResolution","vsync"})cJSON_AddBoolToObject(features,key,false);
     for(auto* key:{"mouseMovementFlags","supportedHidDevices","profile","chromaFormat","prefilterMode","prefilterSharpness","prefilterNoiseReduction","hudStreamingMode","hdrColorSpace"})cJSON_AddNumberToObject(features,key,0);
-    cJSON_AddNumberToObject(features,"bitDepth",settings.tenBit()?1:0);cJSON_AddNullToObject(features,"hidDevices");cJSON_AddNumberToObject(features,"sdrColorSpace",2);cJSON_AddNumberToObject(features,"maxBitrateKbps",settings.bitrate_kbps);cJSON_AddNumberToObject(features,"codec",settings.codec()==VideoCodec::hevc?2:1);if(settings.network==NetworkPolicy::adaptive)cJSON_AddNumberToObject(features,"dynamicStreamingMode",3);cJSON_AddNumberToObject(features,"audioChannelCount",2);
+    cJSON_AddNumberToObject(features,"bitDepth",settings.tenBit()?1:0);cJSON_AddNullToObject(features,"hidDevices");cJSON_AddNumberToObject(features,"sdrColorSpace",2);cJSON_AddNumberToObject(features,"maxBitrateKbps",settings.bitrate_kbps);cJSON_AddNumberToObject(features,"codec",settings.codec()==VideoCodec::hevc?2:1);if(settings.network==NetworkPolicy::adaptive)cJSON_AddNumberToObject(features,"dynamicStreamingMode",3);cJSON_AddNumberToObject(features,"audioChannelCount",audioChannels);
+    cJSON_AddNumberToObject(req,"requestedAudioFormat",audioChannels==8?3:audioChannels==6?2:1);
     auto* meta=cJSON_AddArrayToObject(req,"metaData");
-    const char* keys[]={"SubSessionId","wssignaling","GSStreamerType"};const char* values[]={device,"1","WebRTC"};
-    for(int i=0;i<3;++i){auto* m=cJSON_CreateObject();cJSON_AddStringToObject(m,"key",keys[i]);cJSON_AddStringToObject(m,"value",values[i]);cJSON_AddItemToArray(meta,m);}
+    const auto audioCount=std::to_string(audioChannels);
+    const char* keys[]={"SubSessionId","wssignaling","GSStreamerType","surroundAudioInfo"};const char* values[]={device,"1","WebRTC",audioCount.c_str()};
+    for(int i=0;i<4;++i){auto* m=cJSON_CreateObject();cJSON_AddStringToObject(m,"key",keys[i]);cJSON_AddStringToObject(m,"value",values[i]);cJSON_AddItemToArray(meta,m);}
     auto* monitors=cJSON_AddArrayToObject(req,"clientRequestMonitorSettings");auto* monitor=cJSON_CreateObject();cJSON_AddItemToArray(monitors,monitor);
     for(auto* key:{"monitorId","positionX","positionY"})cJSON_AddNumberToObject(monitor,key,0);
     cJSON_AddNumberToObject(monitor,"widthInPixels",settings.width);cJSON_AddNumberToObject(monitor,"heightInPixels",settings.height);cJSON_AddNumberToObject(monitor,"framesPerSecond",settings.fps);cJSON_AddNumberToObject(monitor,"dpi",100);cJSON_AddNumberToObject(monitor,"sdrHdrMode",settings.hdr()?1:0);if(settings.hdr()){auto* display=cJSON_AddObjectToObject(monitor,"displayData");

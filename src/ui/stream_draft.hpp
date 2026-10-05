@@ -7,6 +7,7 @@
 namespace opennow::ui {
 enum class StreamRow : unsigned { preset, decoding, codec, resolution, fps, bitrate, hdr, reset, count };
 constexpr unsigned rowBit(StreamRow row) {return 1U<<static_cast<unsigned>(row);}
+constexpr unsigned audioBit=1U<<31;
 struct StreamCaps { bool h264Hardware=false, hevcSdr=false, hevcHdr=false; };
 
 inline int maxWidth(const StreamSettings& s) noexcept {return s.hardware()?3840:1920;}
@@ -21,6 +22,7 @@ inline unsigned changedRows(const StreamSettings& a,const StreamSettings& b) noe
     if(a.fps!=b.fps)rows|=rowBit(StreamRow::fps);
     if(a.bitrate_kbps!=b.bitrate_kbps||a.quality!=b.quality||a.network!=b.network)rows|=rowBit(StreamRow::bitrate);
     if(a.hdr()!=b.hdr())rows|=rowBit(StreamRow::hdr);
+    if(a.audio_mode!=b.audio_mode)rows|=audioBit;
     return rows;
 }
 inline unsigned rowCount(unsigned rows) noexcept {unsigned n=0;for(;rows;rows&=rows-1)++n;return n;}
@@ -51,6 +53,9 @@ inline StreamSettings withHdr(StreamSettings s,bool hdr,const StreamCaps& caps) 
     return s;
 }
 
+inline StreamSettings presetFor(StreamProfile profile,const StreamSettings& keep) noexcept {
+    auto s=settingsFor(profile);s.audio_mode=keep.audio_mode;return s;
+}
 inline bool needsFixedNetwork(const StreamSettings& s) noexcept {return s.mode==VideoMode::h264Hardware&&s.network==NetworkPolicy::adaptive;}
 inline StreamSettings modeProbe(VideoMode mode) noexcept {return {320,180,30,4000,mode,QualityMode::original,NetworkPolicy::fixed};}
 
@@ -126,6 +131,7 @@ inline const char* settingsProblem(const StreamSettings& s,bool available) noexc
     case SettingsError::fps: return s.hardware()?"Frame rate must be 30 to 120":"Software decoding allows 30 to 60 FPS";
     case SettingsError::bitrate: return "Bitrate limit must be 4 to 100 Mb/s";
     case SettingsError::network: return "Hardware H.264 needs fixed-resolution streaming";
+    case SettingsError::audio: return "Audio channels setting isn\xE2\x80\x99t valid";
     case SettingsError::mode: case SettingsError::quality: return "These settings aren\xE2\x80\x99t valid";
     case SettingsError::none: break;
     }

@@ -14,6 +14,9 @@ bool inPoll = false, inLoop = false, dropSocket = false;
 bool mediaStarts = true, peerStarts = true, socketStarts = true, entropyWorks = true;
 bool assemblerReady = true, nullAnswer = false;
 bool mediaRunning = false;
+bool audioConfigureSucceeds=true,audioPayloadsSucceed=true,allowEightChannelOutput=true;
+int selectedAudioPayload=-1,selectedRedPayload=-1,audioHandles=0;
+opennow::audio::Format configuredAudio;
 opennow::StreamSettings mediaSettings;
 int runtimeResult = 0;
 PeerConnectionState nextState = PEER_CONNECTION_NEW;
@@ -24,6 +27,10 @@ std::vector<std::string> outbound;
 std::vector<std::string> diagnostics;
 std::string connectedUrl;
 std::vector<opennow::wire::Bytes> sent;
+std::vector<opennow::wire::Bytes> controlSent;
+int inputSendBudget=-1;
+bool controlSendFails=false;
+bool controlOpen=false;
 void (*dataCallback)(char*, size_t, void*, uint16_t) = nullptr;
 void (*dataOpened)(void*) = nullptr;
 void (*dataClosed)(void*) = nullptr;
@@ -67,6 +74,7 @@ void clean() {
     assert(sockets == 0);
     assert(runtimes == 0);
     assert(!mediaRunning);
+    assert(audioHandles==0);
 }
 }
 
@@ -94,8 +102,9 @@ void WebSocketClient::poll() {
 }
 
 namespace opennow {
-bool Media::start(const StreamSettings& settings) noexcept { mediaSettings=settings;frames = 0; mediaRunning = mediaStarts; return mediaStarts; }
-void Media::stop() noexcept { mediaRunning = false; }
+bool Media::start(const StreamSettings& settings,unsigned channels) noexcept { mediaSettings=settings;frames = 0; mediaRunning = mediaStarts&&audioOutput_.open(channels); return mediaRunning; }
+bool Media::configureAudio(const audio::Format& format) noexcept {configuredAudio=format;return audioConfigureSucceeds&&audio::validFormat(format);}
+void Media::stop() noexcept { audioOutput_.close();mediaRunning = false; }
 void Media::requireKeyframe() noexcept {}
 bool Media::video(const std::uint8_t*, std::size_t) noexcept { return true; }
 void Media::audio(const std::uint8_t*, std::size_t, std::uint16_t, std::uint8_t, std::uint32_t) noexcept {}
@@ -105,11 +114,16 @@ void secureErase(void* data, std::size_t size) noexcept { std::memset(data, 0, s
 
 extern "C" {
 unsigned long long sceKernelGetProcessTime() { return 1000000; }
+int sceAudioOutInit(){return 0;}
+int sceAudioOutOpen(int,int,int,unsigned,unsigned,unsigned format){if(format==2&&!allowEightChannelOutput)return -1;++audioHandles;return 10;}
+int sceAudioOutClose(int){--audioHandles;return 0;}
+int sceAudioOutOutput(int,const void*){return 0;}
 void opennow_media_note(const char* note) { diagnostics.emplace_back(note); }
 int opennow_peer_random(unsigned char*, std::size_t);
 int peer_init() { if (!runtimeResult) ++runtimes; return runtimeResult; }
 void peer_deinit() { --runtimes; }
 void peer_connection_set_diagnostics_enabled(int) {}
+int peer_connection_set_audio_payload_types(PeerConnection*,int primary,int red){assert(!remoteSdp.empty());if(!audioPayloadsSucceed)return -1;selectedAudioPayload=primary;selectedRedPayload=red;return 0;}
 PeerConnection* peer_connection_create(PeerConfiguration* config) {
     if (!peerStarts) return nullptr;
     candidates.clear();
@@ -151,14 +165,49 @@ int peer_connection_loop(PeerConnection* pc) {
 }
 int peer_connection_request_video_keyframe(PeerConnection*) { return 0; }
 int peer_connection_create_datachannel_sid(PeerConnection*, DecpChannelType, uint16_t, uint32_t, char*, char*, uint16_t) { return 0; }
-int peer_connection_datachannel_is_open(PeerConnection*, uint16_t) { return 0; }
-int peer_connection_datachannel_send_binary_sid(PeerConnection*, char* data, size_t size, uint16_t sid) { if (!sid) sent.emplace_back(data, data + size); return 0; }
+int peer_connection_datachannel_is_open(PeerConnection*, uint16_t sid) { return sid==6&&controlOpen; }
+int peer_connection_datachannel_send_binary_sid(PeerConnection*, char* data, size_t size, uint16_t sid) {
+    if(!sid){
+        if(inputSendBudget==0)return -1;
+        if(inputSendBudget>0)--inputSendBudget;
+        sent.emplace_back(data,data+size);
+    }else if(sid==6){
+        if(controlSendFails)return -1;
+        controlSent.emplace_back(data,data+size);
+    }
+    return 0;
+}
 }
 
 int main() {
     opennow::Media media;
     opennow::Stream stream(media);
     auto launch = session();
+    {
+        const std::string offered="m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 107 113 114\r\na=rtpmap:107 opus/48000/2\r\n"
+            "a=rtpmap:113 multiopus/48000/8\r\na=fmtp:113 num_streams=5;coupled_streams=3;channel_mapping=0,6,1,2,3,4,5,7\r\n"
+            "a=rtpmap:114 red/48000/8\r\na=fmtp:114 113/113\r\n";
+        launch.settings.audio_mode=opennow::audio::Mode::automatic;launch.audioChannels=8;
+        assert(stream.start(launch,"test"));outbound.clear();queuePayload("sdp",offered.c_str());stream.tick(1000000);
+        assert(!stream.failed()&&configuredAudio.channels==8&&selectedAudioPayload==113&&selectedRedPayload==114);
+        assert(std::any_of(outbound.begin(),outbound.end(),[](const auto& text){return text.find("multiopus/48000/8")!=std::string::npos;}));
+        stream.stop();clean();
+        allowEightChannelOutput=false;
+        assert(stream.start(launch,"test"));queuePayload("sdp",offered.c_str());stream.tick(1000000);
+        assert(!stream.failed()&&configuredAudio.channels==2&&selectedAudioPayload==107&&selectedRedPayload==-1);
+        stream.stop();clean();allowEightChannelOutput=true;
+        for(bool* fail:{&audioPayloadsSucceed,&audioConfigureSucceeds}){
+            *fail=false;assert(stream.start(launch,"test"));outbound.clear();queuePayload("sdp",offered.c_str());stream.tick(1000000);
+            assert(stream.failed()&&std::strstr(stream.status(),"configure offered audio"));clean();*fail=true;
+        }
+        for(const auto& invalid:{std::string("m=video 9 RTP/AVP 107\r\na=rtpmap:107 H264/90000\r\nm=audio 9 RTP/AVP 107\r\na=rtpmap:107 opus/48000/2\r\n"),
+                                offered+"m=audio 9 RTP/AVP 111\r\na=rtpmap:111 opus/48000/2\r\n"}){
+            assert(stream.start(launch,"test"));queuePayload("sdp",invalid.c_str());stream.tick(1000000);
+            assert(stream.failed()&&std::strstr(stream.status(),"supported audio"));clean();
+        }
+        launch=session();launch.audioChannels=8;assert(!stream.start(launch,"test"));clean();launch=session();
+    }
     struct RouteCase {opennow::SignalingSource source;const char* label;};
     for(const auto& route:{
         RouteCase{opennow::SignalingSource::none,"none"},
@@ -595,4 +644,76 @@ int main() {
     assert(sent.size() == 1 && sent[0].size() == 38);
     clean();
     media.frames = 0;
+    for(int protocol:{2,3}){
+        assert(stream.start(session(),"test"));
+        char handshake[]={14,2,static_cast<char>(protocol),0};
+        dataCallback(handshake,sizeof(handshake),dataContext,0);
+        assert(stream.inputReady());
+        opennow::InputQueue retryQueue;
+        sent.clear();
+        inputSendBudget=1;
+        assert(retryQueue.key({0x41,0x1e,opennow::modifierShift|opennow::modifierCtrl}));
+        stream.events(retryQueue,5000000);
+        assert(sent.size()==1&&sent[0]==wire::key(true,0xa0,0x2a,1,protocol,5000000));
+        sent.clear();inputSendBudget=-1;
+        stream.events(retryQueue,5000100);
+        assert(sent.size()==2);
+        assert(sent[0]==wire::key(true,0x11,0x1d,3,protocol,5000100));
+        assert(sent[1]==wire::key(true,0x41,0x1e,3,protocol,5000100));
+        sent.clear();inputSendBudget=0;
+        stream.events(retryQueue,5032100);
+        assert(sent.empty());
+        inputSendBudget=1;
+        stream.events(retryQueue,5032200);
+        assert(sent.size()==1&&sent[0]==wire::key(false,0x41,0x1e,3,protocol,5032200));
+        sent.clear();inputSendBudget=-1;
+        stream.events(retryQueue,5032300);
+        assert(sent.size()==2);
+        assert(sent[0]==wire::key(false,0x11,0x1d,1,protocol,5032300));
+        assert(sent[1]==wire::key(false,0xa0,0x2a,0,protocol,5032300));
+        sent.clear();inputSendBudget=1;
+        retryQueue.move(65535,-65535);
+        stream.events(retryQueue,5100000);
+        assert(sent.size()==1&&sent[0]==wire::mouseMove(32767,-32768,protocol,5100000));
+        sent.clear();inputSendBudget=-1;
+        stream.events(retryQueue,5100001);
+        assert(sent.size()==2);
+        assert(sent[0]==wire::mouseMove(32767,-32767,protocol,5100001));
+        assert(sent[1]==wire::mouseMove(1,0,protocol,5100001));
+        sent.clear();inputSendBudget=0;
+        assert(retryQueue.wheel(-120,120));
+        stream.events(retryQueue,5200000);
+        assert(sent.empty());
+        inputSendBudget=-1;stream.events(retryQueue,5200001);
+        assert(sent.size()==1&&sent[0]==wire::mouseWheel(-120,120,protocol,5200001));
+        sent.clear();inputSendBudget=0;
+        assert(retryQueue.button(1,true));stream.events(retryQueue,5300000);
+        assert(sent.empty());
+        inputSendBudget=-1;stream.events(retryQueue,5300001);
+        assert(sent.size()==1&&sent[0]==wire::mouseButton(true,1,protocol,5300001));
+        sent.clear();inputSendBudget=1;
+        assert(retryQueue.key({0x42,0x30,opennow::modifierShift}));
+        stream.events(retryQueue,5400000);
+        assert(sent.size()==1&&sent[0]==wire::key(true,0xa0,0x2a,1,protocol,5400000));
+        retryQueue.cancel();sent.clear();inputSendBudget=1;
+        stream.events(retryQueue,5400001);
+        assert(sent.size()==1&&sent[0]==wire::key(false,0xa0,0x2a,0,protocol,5400001));
+        sent.clear();inputSendBudget=-1;
+        stream.events(retryQueue,5400002);
+        assert(sent.size()==1&&sent[0]==wire::mouseButton(false,1,protocol,5400002));
+        sent.clear();stream.events(retryQueue,5500000);
+        assert(sent.empty());
+        const wire::Bytes cursor{8,3,1,0,1};
+        controlSent.clear();controlOpen=false;
+        stream.tick(5999999);assert(controlSent.empty());
+        controlOpen=true;controlSendFails=true;
+        stream.tick(6000000);assert(controlSent.empty());
+        controlSendFails=false;stream.tick(6000001);
+        assert(std::count(controlSent.begin(),controlSent.end(),cursor)==1);
+        stream.tick(6000002);
+        assert(std::count(controlSent.begin(),controlSent.end(),cursor)==1);
+        stream.tick(7000001);
+        assert(std::count(controlSent.begin(),controlSent.end(),cursor)==2);
+        stream.stop();clean();controlOpen=false;
+    }
 }

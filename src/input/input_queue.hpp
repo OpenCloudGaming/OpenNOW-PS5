@@ -8,7 +8,7 @@ namespace opennow {
 enum : std::uint8_t { modifierShift=1, modifierCtrl=2, modifierAlt=4 };
 struct KeyStroke { std::uint16_t vk=0, scan=0; std::uint8_t modifiers=0; };
 struct InputEvent {
-    enum class Kind : std::uint8_t { move, button, key, cancel } kind=Kind::move;
+    enum class Kind : std::uint8_t { move, wheel, button, key, cancel } kind=Kind::move;
     int dx=0, dy=0;
     std::uint8_t button=0;
     bool down=false;
@@ -26,8 +26,8 @@ public:
         pthread_mutex_lock(&lock_);
         InputEvent* tail=count_?&events_[(head_+count_-1)%capacity]:nullptr;
         if(tail&&tail->kind==InputEvent::Kind::move) {
-            tail->dx=std::clamp(tail->dx+dx,-static_cast<int>(moveLimit),static_cast<int>(moveLimit));
-            tail->dy=std::clamp(tail->dy+dy,-static_cast<int>(moveLimit),static_cast<int>(moveLimit));
+            tail->dx=static_cast<int>(std::clamp<std::int64_t>(static_cast<std::int64_t>(tail->dx)+dx,-static_cast<int>(moveLimit),moveLimit));
+            tail->dy=static_cast<int>(std::clamp<std::int64_t>(static_cast<std::int64_t>(tail->dy)+dy,-static_cast<int>(moveLimit),moveLimit));
         } else if(count_<capacity) {
             InputEvent e;e.dx=std::clamp(dx,-static_cast<int>(moveLimit),static_cast<int>(moveLimit));
             e.dy=std::clamp(dy,-static_cast<int>(moveLimit),static_cast<int>(moveLimit));
@@ -39,11 +39,19 @@ public:
         InputEvent e;e.kind=InputEvent::Kind::button;e.button=button;e.down=down;
         return push(e,capacity);
     }
+    bool wheel(int dx,int dy) noexcept {
+        InputEvent e;e.kind=InputEvent::Kind::wheel;
+        e.dx=std::clamp(dx,-32768,32767);e.dy=std::clamp(dy,-32768,32767);
+        return push(e,capacity);
+    }
     bool key(const KeyStroke& key) noexcept {
         InputEvent e;e.kind=InputEvent::Kind::key;e.key=key;
         return push(e,keyLimit);
     }
     void cancel() noexcept {pthread_mutex_lock(&lock_);head_=count_=0;cancelled_=true;pthread_mutex_unlock(&lock_);}
+    bool takeCancel() noexcept {
+        pthread_mutex_lock(&lock_);const bool value=cancelled_;cancelled_=false;pthread_mutex_unlock(&lock_);return value;
+    }
     bool take(InputEvent& out,bool keyReady) noexcept {
         pthread_mutex_lock(&lock_);
         bool ok=cancelled_;

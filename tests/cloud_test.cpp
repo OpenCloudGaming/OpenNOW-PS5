@@ -42,6 +42,27 @@ int main(){
   cJSON_Delete(launchBody);
   assert(client.stop("fixture-jwt","fixture-device"));
  }
+ {
+  Mock audioMock;Cloud client(request,&audioMock);client.load("fixture-jwt","fixture-device");
+  for(auto mode:{audio::Mode::automatic,audio::Mode::stereo,audio::Mode::surround51,audio::Mode::surround71}){
+   for(unsigned capacity:{2u,8u}){
+    StreamSettings settings;settings.audio_mode=mode;const auto channels=audio::requestedChannels(mode,capacity);
+    client.launch("fixture-jwt","fixture-device",1,settings,channels);
+    assert(client.session().audioChannels==channels&&client.session().settings.audio_mode==mode);
+    auto* root=cJSON_Parse(audioMock.body.c_str());assert(root);
+    const auto* request=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
+    const auto* features=cJSON_GetObjectItemCaseSensitive(request,"requestedStreamingFeatures");
+    assert(cJSON_GetObjectItemCaseSensitive(features,"audioChannelCount")->valueint==static_cast<int>(channels));
+    assert(cJSON_GetObjectItemCaseSensitive(request,"requestedAudioFormat")->valueint==(channels==8?3:channels==6?2:1));
+    bool found=false;const auto* metadata=cJSON_GetObjectItemCaseSensitive(request,"metaData");
+    for(const auto* item=metadata->child;item;item=item->next){const auto* key=cJSON_GetObjectItemCaseSensitive(item,"key");if(!std::strcmp(key->valuestring,"surroundAudioInfo")){found=true;assert(std::to_string(channels)==cJSON_GetObjectItemCaseSensitive(item,"value")->valuestring);}}
+    assert(found);cJSON_Delete(root);client.tick("fixture-jwt","fixture-device",4);assert(client.session().audioChannels==channels);
+    assert(client.stop("fixture-jwt","fixture-device")&&client.session().audioChannels==2);
+   }
+  }
+  const auto posts=audioMock.posts;
+  for(unsigned bad:{0u,3u,8u}){client.launch("fixture-jwt","fixture-device",10,StreamSettings{},bad);assert(client.view().launchError&&audioMock.posts==posts);client.dismissLaunchError();}
+ }
  assert(trustedCloudUrl("https://games.geforce.com/graphql"));
  for(const char* bad:{"http://games.geforce.com/graphql","https://games.geforce.com.evil.test/graphql","https://evil.test/@games.geforce.com/","https://geforce.com@evil.test/","https://games.geforce.com:443/"})assert(!trustedCloudUrl(bad));
  CloudView view;char cursor[128]{};

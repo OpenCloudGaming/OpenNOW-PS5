@@ -28,6 +28,7 @@ struct Session {
     int mediaPort=0;
     SignalingSource signalingSource=SignalingSource::none;
     StreamSettings settings{};
+    unsigned audioChannels=2;
 };
 static_assert(std::is_trivially_copyable_v<Session> && std::is_standard_layout_v<Session>);
 class Cloud {
@@ -37,8 +38,8 @@ public:
     void loadPage(CatalogSource source,unsigned page,const char* jwt,const char* device,int direction=1) noexcept;
     void select(int delta) noexcept;
     void focus(unsigned index) noexcept;
-    void launch(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings={}) noexcept;
-    void launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept;
+    void launch(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings={},unsigned audioChannels=2) noexcept;
+    void launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels=2) noexcept;
     void dismissLaunchError() noexcept;
     void tick(const char* jwt,const char* device,std::uint64_t now) noexcept;
     bool stop(const char* jwt,const char* device) noexcept;
@@ -51,7 +52,7 @@ private:
     void failLaunch(const char*) noexcept;
     bool connect(const char* jwt,const char* device,CloudView& target) noexcept;
     bool fetchPage(CatalogSource source,unsigned page,const char* jwt,const char* device) noexcept;
-    void start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept;
+    void start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels) noexcept;
     bool parseSession(const Response&) noexcept;
     Request request_;void* context_;
     CloudView view_{},library_{};Session session_{};

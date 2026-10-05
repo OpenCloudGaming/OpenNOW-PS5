@@ -3,6 +3,7 @@
 #include "input/input_queue.hpp"
 #include "input/stream_keyboard.hpp"
 #include "input/touch_mouse.hpp"
+#include "input/launcher_mouse.hpp"
 
 #include <cassert>
 #include <cstring>
@@ -22,6 +23,23 @@ void wireFixtures() {
     assert((mouseMove(-32768,32767,2,stamp)==Bytes{0x07,0,0,0,0x80,0x00,0x7f,0xff,0,0,0,0,0,0,T8}));
     assert((mouseButton(true,3,3,stamp)==Bytes{0x23,T8,0x22,0x08,0,0,0,0x03,0,0,0,0,0,T8}));
     assert((mouseButton(false,1,2,stamp)==Bytes{0x09,0,0,0,0x01,0,0,0,0,0,T8}));
+    assert((mouseWheel(-120,120,2,stamp)==Bytes{0x0a,0,0,0,0xff,0x88,0,0x78,0,0,0,0,0,0,T8}));
+    assert((mouseWheel(120,-120,3,stamp)==Bytes{0x23,T8,0x22,0x0a,0,0,0,0,0x78,0xff,0x88,0,0,0,0,0,0,T8}));
+}
+
+void wheelQueueScenarios() {
+    opennow::InputQueue queue;
+    opennow::InputEvent event;
+    assert(queue.wheel(-99999,99999));
+    assert(queue.take(event,false));
+    assert(event.kind==opennow::InputEvent::Kind::wheel&&event.dx==-32768&&event.dy==32767);
+    for(unsigned i=0;i<opennow::InputQueue::capacity;++i)assert(queue.wheel(0,120));
+    assert(!queue.wheel(120,0));
+    queue.cancel();
+    assert(queue.takeCancel()&&!queue.takeCancel()&&!queue.take(event,true));
+    queue.move(65535,-65535);
+    queue.move(INT32_MAX,INT32_MIN);
+    assert(queue.take(event,true)&&event.dx==65535&&event.dy==-65535);
 }
 
 PS5_PadData touchPad(unsigned fingers,std::uint8_t id0,std::uint16_t x0,std::uint16_t y0,std::uint8_t id1=0,std::uint16_t x1=0,std::uint16_t y1=0) {
@@ -196,8 +214,59 @@ void keyboardScenarios() {
 }
 }
 
+void launcherScenarios() {
+    opennow::LauncherMouse mouse;
+    PS5_PadData pad{};pad.connected=true;pad.leftStick={128,128};pad.rightStick={255,128};
+    auto f=mouse.update(pad,1000000,true);
+    assert(!f.dx&&!f.dy&&!f.left&&!f.right&&!f.wheelX&&!f.wheelY);
+    mouse.active=true;
+    f=mouse.update(pad,1000000,true);
+    assert(f.dx==11&&f.dy==0);
+    f=mouse.update(pad,1016000,true);
+    assert(f.dx==11);
+    f=mouse.update(pad,1032000,true);
+    assert(f.dx==11||f.dx==12);
+    pad.rightStick={128+15,128-15};
+    f=mouse.update(pad,1048000,true);
+    assert(f.dx==0&&f.dy==0);
+    pad.rightStick={0,128};mouse.speed=2;
+    f=mouse.update(pad,1148000,true);
+    assert(f.dx<=-70&&f.dx>=-71);
+    mouse.cycleSpeed();assert(mouse.speed==0);
+    pad.rightStick={128,255};
+    f=mouse.update(pad,1164000,true);
+    assert(f.dy==4&&f.dx==0);
+    pad.rightStick={128,128};
+    pad.buttons=PS5_PAD_BUTTON_R2;pad.analogButtons={40,0};
+    f=mouse.update(pad,1180000,true);
+    assert(f.left&&f.right);
+    pad.buttons=0;pad.analogButtons={0,33};
+    f=mouse.update(pad,1196000,true);
+    assert(f.left&&!f.right);
+    pad.analogButtons={0,32};
+    pad.buttons=PS5_PAD_BUTTON_UP|PS5_PAD_BUTTON_LEFT;
+    f=mouse.update(pad,1212000,true);
+    assert(!f.left&&f.wheelY==120&&f.wheelX==-120);
+    f=mouse.update(pad,1228000,true);
+    assert(f.wheelY==120);
+    mouse.wheelSent(1228000);
+    f=mouse.update(pad,1300000,true);
+    assert(!f.wheelX&&!f.wheelY);
+    pad.buttons=PS5_PAD_BUTTON_DOWN|PS5_PAD_BUTTON_RIGHT;
+    f=mouse.update(pad,1378000,true);
+    assert(f.wheelY==-120&&f.wheelX==120);
+    pad.rightStick={255,255};
+    f=mouse.update(pad,1394000,false);
+    assert(!f.dx&&!f.dy&&!f.wheelY&&mouse.last==0&&mouse.x==0);
+    PS5_PadData gone{};
+    f=mouse.update(gone,1410000,true);
+    assert(!f.left&&!f.dx);
+}
+
 int main() {
+    launcherScenarios();
     wireFixtures();
+    wheelQueueScenarios();
     touchScenarios();
     queueScenarios();
     keyboardScenarios();

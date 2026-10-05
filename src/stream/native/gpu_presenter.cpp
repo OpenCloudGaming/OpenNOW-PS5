@@ -27,6 +27,7 @@ struct ResolutionStatus {std::uint32_t width,height,paneWidth,paneHeight;std::ui
 struct OutputStatus {std::uint32_t resolution,range;std::uint64_t rate,flags,reserved[3];};
 int sceVideoOutGetResolutionStatus(int,ResolutionStatus*);
 int sceVideoOutGetOutputStatus(int,OutputStatus*);
+unsigned long long sceKernelGetProcessTime();
 }
 static_assert(sizeof(ResolutionStatus)==48&&sizeof(OutputStatus)==48);
 namespace opennow::gpu {
@@ -34,8 +35,12 @@ namespace {
 EGLDisplay display=EGL_NO_DISPLAY;EGLContext context=EGL_NO_CONTEXT;EGLSurface window=EGL_NO_SURFACE;
 GLuint program=0,vao=0,uiTexture=0;unsigned width=3840,height=2160,refresh=0;
 bool ready=false,hdrScanout=false,videoDrawn=false;
+GLuint retainedFbo=0,retainedTexture=0,overlayTexture=0;
+bool overlayActive=false,overlayDirty=false,releasing=false,retainedValid=false,retainedHdr=false,retainFailed=false;
+std::uint64_t overlayWaitSince=0;
+constexpr std::uint64_t overlayVideoWaitUs=100000;
 std::array<video::NativeEnvelope,4> qualified{};
-char label[128]="Software video / SDR / Stereo";
+char label[128]="Software video / SDR";
 using ImageTarget=void(*)(GLenum,void*);ImageTarget imageTarget=nullptr;
 constexpr std::uint64_t sdrFormat=0x8000000000000000ULL,hdrFormat=0x8100070422000000ULL;
 const char* vertex=R"(#version 330 core
@@ -47,6 +52,17 @@ uniform sampler2D yTex;uniform sampler2D uvTex;
 uniform vec2 crop;uniform int mode;uniform int fullRange;
 void main(){
  if(mode==0){color=texture(yTex,uv);return;}
+ if(mode==6){color=texelFetch(yTex,ivec2(gl_FragCoord.xy),0);return;}
+ if(mode==4||mode==5){
+  vec4 ui=texelFetch(yTex,ivec2(uv*vec2(textureSize(yTex,0))),0);if(ui.a<0.5)discard;
+  if(mode==4){color=ui;return;}
+  vec3 linear=mix(pow((ui.rgb+0.055)/1.055,vec3(2.4)),ui.rgb/12.92,lessThanEqual(ui.rgb,vec3(0.04045)));
+  linear=mat3(0.6274,0.0691,0.0164,0.3293,0.9195,0.0880,0.0433,0.0114,0.8956)*linear;
+  vec3 luminance=pow(clamp(linear,0.0,1.0)*0.0203,vec3(0.1593017578125));
+  vec3 pq=pow((0.8359375+18.8515625*luminance)/(1.0+18.6875*luminance),vec3(78.84375));
+  uvec3 q=uvec3(round(pq*1023.0));uint w=q.r|(q.g<<10u)|(q.b<<20u)|(3u<<30u);
+  color=vec4(float((w>>16u)&255u),float((w>>8u)&255u),float(w&255u),float(w>>24u))/255.0;return;
+ }
  vec2 pos=uv*crop;float y=texture(yTex,pos).r;vec2 c=texture(uvTex,pos).rg;
  vec3 rgb;
  if(mode==2){y=(y*65535.0-64.0)/876.0;c=(c*65535.0-512.0)/896.0;
@@ -64,6 +80,24 @@ GLuint shader(GLenum type,const char* source){
  auto id=glCreateShader(type);glShaderSource(id,1,&source,nullptr);glCompileShader(id);GLint ok=0;glGetShaderiv(id,GL_COMPILE_STATUS,&ok);
  if(!ok){char log[1024]{};glGetShaderInfoLog(id,sizeof(log),nullptr,log);opennow_media_note(log);glDeleteShader(id);return 0;}return id;
 }
+void releaseRetained(){
+ if(retainedFbo)glDeleteFramebuffers(1,&retainedFbo);
+ if(retainedTexture)glDeleteTextures(1,&retainedTexture);
+ retainedFbo=retainedTexture=0;retainedValid=false;
+}
+bool allocateRetained(){
+ if(retainedFbo)return true;
+ if(retainFailed)return false;
+ glGenTextures(1,&retainedTexture);glBindTexture(GL_TEXTURE_2D,retainedTexture);
+ glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+ glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+ glGenFramebuffers(1,&retainedFbo);glBindFramebuffer(GL_FRAMEBUFFER,retainedFbo);
+ glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,retainedTexture,0);
+ const bool ok=glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE&&glGetError()==GL_NO_ERROR;
+ glBindFramebuffer(GL_FRAMEBUFFER,0);
+ if(!ok){releaseRetained();retainFailed=true;opennow_media_note("GPU overlay video retention unavailable");}
+ return ok;
+}
 bool setHdr(bool hdr){
  if(hdr==hdrScanout)return true;
  glFinish();std::int32_t results[4]{};const int rc=ps5_opengl_set_scanout_format(hdr?hdrFormat:sdrFormat,results);
@@ -77,7 +111,7 @@ void queryOutput(video::NativeQualification& q){
  if(rr==0){q.output_width=r.width;q.output_height=r.height;q.output_refresh_hz=hz;refresh=hz;}
  q.hdr_output=ro==0&&(o.range==2||(o.flags&1));
  char note[256];std::snprintf(note,sizeof(note),"GPU output handle=%d resolutionRC=%x %ux%u refreshCode=%llu outputRC=%x range=%u flags=%llu",handle,rr,r.width,r.height,(unsigned long long)r.rate,ro,o.range,(unsigned long long)o.flags);opennow_media_note(note);
- std::snprintf(label,sizeof(label),"OUTPUT %ux%u / %u HZ / %s / STEREO",q.output_width,q.output_height,hz,q.hdr_output?"HDR":"SDR");
+ std::snprintf(label,sizeof(label),"OUTPUT %ux%u / %u HZ / %s",q.output_width,q.output_height,hz,q.hdr_output?"HDR":"SDR");
 }
 void qualifyPipeline(const video::NativeMode& mode,const std::vector<std::uint8_t>& data,
                      std::size_t bytes,const video::SurfaceFingerprint& baseline){
@@ -193,7 +227,8 @@ void shutdown() noexcept {
  qualified={};
  if(display==EGL_NO_DISPLAY)return;
  if(context!=EGL_NO_CONTEXT){
-  glFinish();glDeleteTextures(1,&uiTexture);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);
+  glFinish();releaseRetained();if(overlayTexture)glDeleteTextures(1,&overlayTexture);overlayTexture=0;
+  glDeleteTextures(1,&uiTexture);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);
  }
  ready=false;
  eglMakeCurrent(display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
@@ -219,13 +254,14 @@ StreamSettings bestSettings() noexcept{
 }
 bool drawVideo(const video::NativeSurface& s,const video::NativeMode& mode) noexcept {
  if(!ready||!s.buffer||!setHdr(mode.hdr))return false;
+ const bool retain=overlayActive&&allocateRetained();
  const auto viewport=video::fitVideoRect(mode.visible_width,mode.visible_height,width,height);
  const unsigned bytes=mode.storage==video::SampleStorage::low_aligned_10bit?2:1,rows=s.height;
  void* images[2]={ps5_opengl_memory_image_create(const_cast<void*>(s.buffer),s.pitch_bytes/bytes,rows,s.pitch_bytes,1,bytes),
  ps5_opengl_memory_image_create(static_cast<std::uint8_t*>(const_cast<void*>(s.buffer))+std::size_t(s.pitch_bytes)*rows,s.pitch_bytes/(2*bytes),rows/2,s.pitch_bytes,2,bytes)};
  GLuint textures[2]{};bool ok=images[0]&&images[1];
  if(ok){glGenTextures(2,textures);glUseProgram(program);glBindVertexArray(vao);glDisable(GL_FRAMEBUFFER_SRGB);glDisable(GL_DITHER);
-  glDisable(GL_SCISSOR_TEST);glViewport(0,0,width,height);
+  glDisable(GL_SCISSOR_TEST);if(retain)glBindFramebuffer(GL_FRAMEBUFFER,retainedFbo);glViewport(0,0,width,height);
   glClearColor(0,0,0,float(video::packedVideoBlack(mode.hdr)>>24)/255.0f);glClear(GL_COLOR_BUFFER_BIT);
   glViewport(viewport.x,viewport.y,viewport.width,viewport.height);
   for(unsigned i=0;i<2;++i){glActiveTexture(GL_TEXTURE0+i);glBindTexture(GL_TEXTURE_2D,textures[i]);imageTarget(GL_TEXTURE_2D,images[i]);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);}
@@ -233,8 +269,70 @@ bool drawVideo(const video::NativeSurface& s,const video::NativeMode& mode) noex
   glUniform1i(glGetUniformLocation(program,"fullRange"),mode.full_range?1:0);
   glUniform2f(glGetUniformLocation(program,"crop"),float(mode.visible_width)/s.pitch_components,float(mode.visible_height)/rows);glDrawArrays(GL_TRIANGLES,0,3);glFinish();ok=glGetError()==GL_NO_ERROR;
  }
+ if(retain){glBindFramebuffer(GL_FRAMEBUFFER,0);retainedValid=ok;retainedHdr=mode.hdr;}
  glViewport(0,0,width,height);glDeleteTextures(2,textures);for(auto* image:images)if(image)ps5_opengl_memory_image_destroy(image);
  if(!ok)opennow_media_note("GPU surface import/draw failed");videoDrawn=ok;return ok;
+}
+namespace {
+void clearBlack(){
+ glBindFramebuffer(GL_FRAMEBUFFER,0);glViewport(0,0,width,height);
+ glClearColor(0,0,0,float(video::packedVideoBlack(hdrScanout)>>24)/255.0f);glClear(GL_COLOR_BUFFER_BIT);
+}
+void drawRetained(){
+ glUseProgram(program);glBindVertexArray(vao);glViewport(0,0,width,height);
+ glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,retainedTexture);
+ glUniform1i(glGetUniformLocation(program,"yTex"),0);glUniform1i(glGetUniformLocation(program,"mode"),6);glDrawArrays(GL_TRIANGLES,0,3);
+}
+void drawOverlay(const std::uint32_t* pixels){
+ glUseProgram(program);glBindVertexArray(vao);glViewport(0,0,width,height);glActiveTexture(GL_TEXTURE0);
+ if(!overlayTexture){glGenTextures(1,&overlayTexture);overlayDirty=true;}
+ glBindTexture(GL_TEXTURE_2D,overlayTexture);
+ if(overlayDirty) {
+  glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1920,1080,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+  overlayDirty=false;
+ }
+ glUniform1i(glGetUniformLocation(program,"yTex"),0);glUniform1i(glGetUniformLocation(program,"mode"),hdrScanout?5:4);glDrawArrays(GL_TRIANGLES,0,3);
+}
+}
+void setOverlay(bool active,bool changed) noexcept {
+ if(active){if(!overlayActive){overlayActive=true;overlayDirty=true;overlayWaitSince=0;}if(changed)overlayDirty=true;return;}
+ if(overlayActive){overlayActive=false;overlayDirty=false;releasing=true;}
+}
+bool overlayPending() noexcept{return (overlayActive&&overlayDirty)||releasing;}
+bool hasRetainedVideo() noexcept{return retainedValid;}
+void invalidateVideo() noexcept{
+ if(ready)releaseRetained();
+ retainedValid=retainFailed=overlayActive=overlayDirty=releasing=videoDrawn=false;overlayWaitSince=0;
+}
+bool present(const std::uint32_t* pixels) noexcept {
+ if(!ready)return false;
+ const bool video=videoDrawn;videoDrawn=false;
+ if(overlayActive) {
+  if(retainedValid){if(!setHdr(retainedHdr))return false;drawRetained();}
+  else if(video)overlayWaitSince=0;
+  else {
+   const auto now=sceKernelGetProcessTime();
+   if(!overlayWaitSince)overlayWaitSince=now;
+   if(now-overlayWaitSince<overlayVideoWaitUs)return true;
+   clearBlack();
+  }
+  if(pixels)drawOverlay(pixels);
+  return swap();
+ }
+ if(releasing) {
+  releasing=false;
+  if(!video) {
+   const bool ok=!retainedValid||setHdr(retainedHdr);
+   if(ok&&retainedValid)drawRetained();else if(ok)clearBlack();
+   releaseRetained();
+   return ok&&swap();
+  }
+  releaseRetained();
+ }
+ if(video)return swap();
+ drawInterface(pixels);
+ return swap();
 }
 void drawInterface(const std::uint32_t* pixels) noexcept {
  if(!ready||!pixels||!setHdr(false))return;
@@ -244,7 +342,6 @@ void drawInterface(const std::uint32_t* pixels) noexcept {
  glUniform1i(glGetUniformLocation(program,"yTex"),0);glUniform1i(glGetUniformLocation(program,"mode"),0);glDrawArrays(GL_TRIANGLES,0,3);
 }
 bool swap() noexcept{return ready&&eglSwapBuffers(display,window)==EGL_TRUE;}
-bool takeVideoDrawn() noexcept{const bool drawn=videoDrawn;videoDrawn=false;return drawn;}
 const char* outputLabel() noexcept{return label;}
 }
 #else
@@ -258,7 +355,8 @@ StreamProfile bestProfile() noexcept{return StreamProfile::quality;}
 StreamSettings bestSettings() noexcept{return settingsFor(StreamProfile::quality);}
 bool drawVideo(const video::NativeSurface&,const video::NativeMode&) noexcept{return false;}
 void drawInterface(const std::uint32_t*) noexcept{}bool swap() noexcept{return false;}
-bool takeVideoDrawn() noexcept{return false;}
-const char* outputLabel() noexcept{return "1080P SDR / STEREO";}
+void setOverlay(bool,bool) noexcept{}bool overlayPending() noexcept{return false;}bool hasRetainedVideo() noexcept{return false;}
+void invalidateVideo() noexcept{}bool present(const std::uint32_t*) noexcept{return false;}
+const char* outputLabel() noexcept{return "1080P SDR";}
 }
 #endif

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #include "agent.h"
@@ -54,7 +55,11 @@ struct PeerConnection {
   RtpDecoder artp_decoder;
 
   uint32_t remote_assrc;
+  int audio_payload;
+  int audio_red_payload;
   uint32_t remote_vssrc;
+  uint8_t video_payloads[128];
+  uint8_t video_routable_payloads[128];
   uint16_t video_last_nack_expected;
   uint32_t video_last_nack_ms;
   int video_has_last_nack;
@@ -464,6 +469,65 @@ void* peer_connection_get_sctp(PeerConnection* pc) {
   return &pc->sctp;
 }
 
+int peer_connection_set_audio_payload_types(PeerConnection* pc, int opus, int red) {
+  if (!pc || opus < 0 || opus > 127 || red < -1 || red > 127 || opus == red)
+    return -1;
+  if (pc->video_payloads[opus] || (red >= 0 && pc->video_payloads[red]))
+    return -1;
+  if (pc->audio_payload == opus && pc->audio_red_payload == red)
+    return 0;
+
+  pc->audio_payload = opus;
+  pc->audio_red_payload = red;
+  pc->remote_assrc = 0;
+  rtp_decoder_cleanup(&pc->artp_decoder);
+  rtp_decoder_init(&pc->artp_decoder, pc->config.audio_codec,
+                   pc->config.onaudiotrack, pc->config.user_data);
+  rtp_decoder_set_audio_callback(&pc->artp_decoder, pc->config.onaudiopacket);
+  return 0;
+}
+
+typedef enum PeerRtpRoute {
+  PEER_RTP_DROP,
+  PEER_RTP_AUDIO,
+  PEER_RTP_VIDEO
+} PeerRtpRoute;
+
+static PeerRtpRoute peer_connection_classify_rtp(const PeerConnection* pc,
+                                                unsigned payload_type,
+                                                uint32_t ssrc) {
+  if (payload_type > 127 || ssrc == 0)
+    return PEER_RTP_DROP;
+
+  int audio = 0;
+  switch (pc->config.audio_codec) {
+    case CODEC_OPUS:
+      audio = (int)payload_type == pc->audio_payload ||
+              (int)payload_type == pc->audio_red_payload;
+      break;
+    case CODEC_PCMA:
+      audio = payload_type == PT_PCMA;
+      break;
+    case CODEC_PCMU:
+      audio = payload_type == PT_PCMU;
+      break;
+    default:
+      break;
+  }
+  const int video = pc->config.video_codec != CODEC_NONE &&
+                    pc->video_routable_payloads[payload_type];
+  if (audio) {
+    if (pc->video_payloads[payload_type] || ssrc == pc->remote_vssrc ||
+        (pc->remote_assrc != 0 && ssrc != pc->remote_assrc))
+      return PEER_RTP_DROP;
+    return PEER_RTP_AUDIO;
+  }
+  if (video && ssrc != pc->remote_assrc &&
+      (pc->remote_vssrc == 0 || ssrc == pc->remote_vssrc))
+    return PEER_RTP_VIDEO;
+  return PEER_RTP_DROP;
+}
+
 PeerConnection* peer_connection_create(PeerConfiguration* config) {
   PeerConnection* pc = calloc(1, sizeof(PeerConnection));
   if (!pc) {
@@ -471,6 +535,8 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
   }
 
   memcpy(&pc->config, config, sizeof(PeerConfiguration));
+  pc->audio_payload = -1;
+  pc->audio_red_payload = -1;
   pc->state = PEER_CONNECTION_NEW;
 
   agent_create(&pc->agent);
@@ -812,11 +878,8 @@ int peer_connection_loop(PeerConnection* pc) {
           ssrc = rtp_get_ssrc(pc->agent_buf);
           const unsigned payload_type = pc->agent_buf[1] & 0x7f;
           pc->payload_counts[payload_type]++;
-          const int is_audio_payload = payload_type == PT_PCMU ||
-                                       payload_type == PT_PCMA ||
-                                       payload_type == PT_OPUS ||
-                                       payload_type == 63;
-          if (ssrc == pc->remote_assrc || (pc->remote_assrc == 0 && is_audio_payload)) {
+          const PeerRtpRoute route = peer_connection_classify_rtp(pc, payload_type, ssrc);
+          if (route == PEER_RTP_AUDIO) {
             if (pc->remote_assrc == 0) {
               pc->remote_assrc = ssrc;
               LOGI("Learned remote audio SSRC from RTP: %" PRIu32, pc->remote_assrc);
@@ -824,12 +887,7 @@ int peer_connection_loop(PeerConnection* pc) {
                                        pc->remote_assrc, payload_type);
             }
             rtp_decoder_decode(&pc->artp_decoder, pc->agent_buf, pc->agent_ret);
-          } else if (ssrc == pc->remote_vssrc ||
-                     (pc->remote_vssrc == 0 &&
-                      payload_type != PT_PCMU &&
-                      payload_type != PT_PCMA &&
-                      payload_type != PT_OPUS &&
-                      payload_type != 63)) {
+          } else if (route == PEER_RTP_VIDEO) {
             if (pc->remote_vssrc == 0) {
               pc->remote_vssrc = ssrc;
               LOGI("Learned remote video SSRC from RTP: %" PRIu32, pc->remote_vssrc);
@@ -915,7 +973,10 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
   int is_update = 0;
   int video_ssrc_seen = 0;
   int audio_ssrc_seen = 0;
+  uint8_t video_section_payloads[128] = {0};
   Agent* agent = &pc->agent;
+  memset(pc->video_payloads, 0, sizeof(pc->video_payloads));
+  memset(pc->video_routable_payloads, 0, sizeof(pc->video_routable_payloads));
 
   while ((line = strstr(start, "\r\n"))) {
     line = strstr(start, "\r\n");
@@ -939,10 +1000,48 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
       is_update = 1;
     }
 
-    if (strstr(buf, "m=video")) {
-      ssrc = &pc->remote_vssrc;
-    } else if (strstr(buf, "m=audio")) {
-      ssrc = &pc->remote_assrc;
+    if (strncmp(buf, "m=", 2) == 0) {
+      ssrc = NULL;
+      memset(video_section_payloads, 0, sizeof(video_section_payloads));
+      if (strncmp(buf, "m=video ", 8) == 0) {
+        unsigned port = 0;
+        int payload_offset = 0;
+        if (sscanf(buf + 8, "%u %*s %n", &port, &payload_offset) == 1 &&
+            port != 0 && payload_offset > 0) {
+          ssrc = &pc->remote_vssrc;
+          char* payload = buf + 8 + payload_offset;
+          while (*payload) {
+            char* end = NULL;
+            const long pt = strtol(payload, &end, 10);
+            if (end == payload)
+              break;
+            if (pt >= 0 && pt <= 127) {
+              pc->video_payloads[pt] = 1;
+              video_section_payloads[pt] = 1;
+            }
+            payload = end;
+          }
+        }
+      } else if (strncmp(buf, "m=audio ", 8) == 0) {
+        unsigned port = 0;
+        if (sscanf(buf + 8, "%u", &port) == 1 && port != 0)
+          ssrc = &pc->remote_assrc;
+      }
+    }
+
+    if (ssrc == &pc->remote_vssrc && strncmp(buf, "a=rtpmap:", 9) == 0) {
+      unsigned pt = 0;
+      unsigned clock_rate = 0;
+      char codec[32];
+      if (sscanf(buf, "a=rtpmap:%u %31[^/]/%u", &pt, codec, &clock_rate) == 3 &&
+          pt <= 127 && video_section_payloads[pt] && clock_rate == 90000) {
+        const int selected =
+            (pc->config.video_codec == CODEC_H264 && strcasecmp(codec, "H264") == 0) ||
+            (pc->config.video_codec == CODEC_HEVC &&
+             (strcasecmp(codec, "H265") == 0 || strcasecmp(codec, "HEVC") == 0));
+        if (selected)
+          pc->video_routable_payloads[pt] = 1;
+      }
     }
 
     if ((val_start = strstr(buf, "a=ssrc:")) && ssrc) {

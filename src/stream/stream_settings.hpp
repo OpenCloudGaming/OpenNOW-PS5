@@ -1,5 +1,6 @@
 #pragma once
 #include <type_traits>
+#include "audio_format.hpp"
 namespace opennow {
 // Streaming targets. Native profiles are exposed only after console startup
 // qualification; sustained frame rate and received codec are measured separately.
@@ -15,6 +16,7 @@ struct StreamSettings {
  VideoMode mode=VideoMode::h264Software;
  QualityMode quality=QualityMode::original;
  NetworkPolicy network=NetworkPolicy::adaptive;
+ audio::Mode audio_mode=audio::Mode::stereo;
  VideoCodec codec() const noexcept {return tenBit()?VideoCodec::hevc:VideoCodec::h264;}
  bool hardware() const noexcept {return mode!=VideoMode::h264Software;}
  bool hdr() const noexcept {return mode==VideoMode::hevcMain10HdrHardware;}
@@ -22,7 +24,7 @@ struct StreamSettings {
  bool operator==(const StreamSettings&) const = default;
 };
 static_assert(std::is_trivially_copyable_v<StreamSettings> && std::is_standard_layout_v<StreamSettings>);
-enum class SettingsError { none, mode, quality, network, dimensions, fps, bitrate };
+enum class SettingsError { none, mode, quality, network, dimensions, fps, bitrate, audio };
 inline SettingsError validateSettings(const StreamSettings& settings) noexcept {
  if(settings.mode<VideoMode::h264Software||settings.mode>VideoMode::hevcMain10HdrHardware)return SettingsError::mode;
  if(settings.quality<QualityMode::original||settings.quality>QualityMode::clarity)return SettingsError::quality;
@@ -32,6 +34,7 @@ inline SettingsError validateSettings(const StreamSettings& settings) noexcept {
     settings.height>(settings.hardware()?2160:1080)||(settings.width&1)||(settings.height&1))return SettingsError::dimensions;
  if(settings.fps<30||settings.fps>(settings.hardware()?120:60))return SettingsError::fps;
  if(settings.bitrate_kbps<4000||settings.bitrate_kbps>100000)return SettingsError::bitrate;
+ if(settings.audio_mode<audio::Mode::automatic||settings.audio_mode>audio::Mode::surround71)return SettingsError::audio;
  return SettingsError::none;
 }
 inline StreamSettings settingsFor(StreamProfile profile) {

@@ -43,7 +43,7 @@ Legacy releases come from a separate development history. They do **not** includ
 
 - NVIDIA device-code sign-in, saved login, and automatic credential renewal.
 - Separate account Library and Browse sections, real cover art, search, session allocation, and cancellation.
-- Native H.264 and HEVC Main10 video decoding, GPU presentation, and Opus stereo audio.
+- Native H.264 and HEVC Main10 video decoding, GPU presentation, and negotiated Opus audio.
 - DualSense gamepad input, touchpad mouse controls, and an in-game keyboard.
 - Streaming presets and custom resolution, FPS, bitrate, codec, and hardware/software decoding settings.
 - Bounded on-disk artwork caching that survives app restarts.
@@ -57,7 +57,7 @@ One recorded console test received and presented a 3840 × 2160 Main10 SDR strea
 - Sustained **120 FPS gameplay and real HDR source content are not validated**. A selected profile or HDMI output mode is not proof of the stream's actual format or frame rate.
 - The server can supply a different frame rate, bitrate, or dynamic range from the requested profile. Some earlier 90 FPS requests received 60 FPS.
 - The deeper decode pipeline applies to qualified UHD Main10. H.264 still uses depth one.
-- Audio on this branch is stereo. Broader game, display, firmware, and loader compatibility needs testing.
+- Stereo is the audio default. Auto, 5.1, and 7.1 requests and multichannel decoding need live console acceptance; an eight-channel AudioOut port does not verify your speaker or receiver layout. Broader game, display, firmware, and loader compatibility needs testing.
 - Software decoding supports H.264 SDR only. Hardware H.264 and HEVC Main10 modes are offered only after startup qualification. AV1 is not implemented; the current [PS5_Vulkan video limitations](https://github.com/mihawk-99/PS5_Vulkan/blob/f3cbf875f89978deae9f855b9be2610cec2818ae/docs/CTS_GAPS.md) do not provide an alternative decoder.
 
 ## Install
@@ -91,7 +91,9 @@ Move past the edge of a game page to load the next or previous page. In game det
 
 In catalog search, use the D-pad to select a character and Cross to type it. Square deletes a character, Triangle clears the text, Options submits, and Circle cancels.
 
-During streaming, the touchpad moves the mouse. A physical click with one finger is left-click; with two fingers it is right-click. **Options + Triangle** opens or closes the in-game keyboard, and **Options + Square** sends gamepad Back/View. In the keyboard, Cross presses a key, Square is Backspace, Triangle is Space, L1 toggles Shift, and Circle returns to the game. The keyboard temporarily replaces the picture while decoding and audio continue; typed text is not echoed or logged. Options can reach the game before the second button of a shortcut is pressed.
+During streaming, the touchpad moves the mouse. A physical click with one finger is left-click; with two fingers it is right-click. **Options + Triangle** opens or closes the in-game keyboard, and **Options + Square** sends gamepad Back/View. In the keyboard, Cross presses a key, Square is Backspace, Triangle is Space, L1 toggles Shift, and Circle closes the keyboard. The keyboard overlays the video; typed text is not echoed or logged. Options can reach the game before the second button of a shortcut is pressed.
+
+**Options + R3** toggles launcher mouse mode. Use the right stick to move, R2/L2 for left/right clicks and dragging, the D-pad to scroll, Square to cycle pointer speed, and Triangle to open the keyboard. The touchpad mouse still works. Launcher mode suppresses ordinary gamepad input until you exit it. The pointer comes from the cloud stream, not a local position estimate.
 
 ### Custom stream settings and artwork cache
 
@@ -102,6 +104,8 @@ The application allows even dimensions from 320×180 up to 3840×2160 and intege
 Hardware H.264 requires fixed-resolution streaming. When switching from an adaptive configuration, the app asks before changing that policy. HEVC Main10 SDR and HDR have separate runtime qualification paths. Existing preset-only settings files are migrated without changing the saved NVIDIA login.
 
 **Settings → Cover art & cache** controls persistent artwork storage under `/download0/opennow/artwork`. The cache has a 64 MiB budget and at most 128 images, with oldest-access eviction. Larger images can remain memory-only. Turning saving off retains existing disk content; Clear removes only cache files, even while saving is off. It does not remove your login, stream settings, or NVIDIA Library entries.
+
+Development build `00.002.045` adds **Settings → Display & audio → Audio channels**, with Auto, Stereo, 5.1, and 7.1 requests. Options saves every unsaved stream change, including video settings. Older settings migrate to Stereo without changing video or cache preferences. The server determines the negotiated format and can provide stereo instead. See [the original PS5 upstream audit](docs/PS5_UPSTREAM_SYNC.md) for the imported functionality and verification limits.
 
 ## Privacy and saved login
 
@@ -122,7 +126,7 @@ git clone https://github.com/OpenCloudGaming/OpenNOW-PS5.git
 cd OpenNOW-PS5
 ```
 
-Host tests use synthetic fixtures and need no console or NVIDIA account. Install Clang with AddressSanitizer and UndefinedBehaviorSanitizer support, Python 3, and libcurl, EGL, and OpenGL development headers. On Ubuntu, the graphics-header packages are `libegl-dev` and `libgl-dev`. Then run:
+Host tests use synthetic fixtures and need no console or NVIDIA account. Install Clang with AddressSanitizer and UndefinedBehaviorSanitizer support, Python 3, `glslang-tools`, and development headers for libcurl, EGL, OpenGL, Opus, mbedTLS, libsrtp2, and usrsctp. On Ubuntu, these headers come from `libcurl4-openssl-dev libegl-dev libgl-dev libopus-dev libmbedtls-dev libsrtp2-dev libusrsctp-dev`. Then run:
 
 ```sh
 CC=clang CXX=clang++ bash tools/test-port.sh
@@ -154,6 +158,7 @@ See [contributing](CONTRIBUTING.md) for the development workflow, [native hardwa
 | [Port status](docs/PORT_STATUS.md) | Implementation history and console results |
 | [Development builds](docs/DEVELOPMENT_BUILDS.md) | Behavior changes since the original alpha |
 | [Android upstream sync](docs/UPSTREAM_SYNC.md) | Reviewed fixes, ported behavior, and platform-specific exclusions |
+| [Original PS5 upstream sync](docs/PS5_UPSTREAM_SYNC.md) | Launcher input, video overlays, multichannel audio, and retained local behavior |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Build, loader, and deployment checks |
 | [Third-party notices](THIRD_PARTY_NOTICES.md) | Component licenses and source provenance |
 

@@ -29,4 +29,8 @@ inline Bytes mouseMove(std::int16_t dx,std::int16_t dy,int protocol,std::uint64_
     wire.insert(wire.end(),p.begin(),p.end());
     return wire;
 }
+inline Bytes mouseWheel(std::int16_t dx,std::int16_t dy,int protocol,std::uint64_t now){
+    Bytes p;le32(p,10);be(p,static_cast<std::uint16_t>(dx),2);be(p,static_cast<std::uint16_t>(dy),2);be(p,0,2);be(p,0,4);be(p,now,8);
+    return single(p,protocol,now);
+}
 }
