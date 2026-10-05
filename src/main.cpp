@@ -7,6 +7,9 @@
 #include "random.hpp"
 #include "cloud.hpp"
 #include "catalog_search.hpp"
+#include "input/input_queue.hpp"
+#include "input/stream_keyboard.hpp"
+#include "input/touch_mouse.hpp"
 #include "ui/tv_ui.hpp"
 #include "ui/artwork.hpp"
 #include "stream/native/gpu_presenter.hpp"
@@ -52,6 +55,7 @@ PS5_PadData publishedPad{};
 opennow::Media media;
 #endif
 bool publishedStream=false;
+bool publishedInputReady=false;
 bool publishedSession=false;
 bool publishedStreamFailure=false;
 StreamProfile publishedProfile=StreamProfile::quality;
@@ -65,6 +69,13 @@ int storageError=0;
 int pad=-1;
 unsigned lastButtons=0;
 opennow::CatalogSearch searchInput;
+opennow::InputQueue inputQueue;
+opennow::StreamKeyboard keyboard;
+opennow::TouchMouse touchMouse;
+std::uint8_t sentMouse=0;
+unsigned suppressed=0;
+bool backHeld=false;
+bool padConnected=false;
 char pendingSearch[128]{};
 char shownSearch[128]{};
 unsigned publishedProfileMask=0;
@@ -245,9 +256,9 @@ void* worker(void*) {
             cloud.tick(login.cloudToken(),id,now/1000000);
             if(const int pending=command.load();pending==2||pending==10||pending==11)continue;
 #ifndef OPENNOW_HOST_PREVIEW
-            if(cloud.view().state==CloudState::ready&&!streamAttempted){streamAttempted=true;stream.start(cloud.session(),id);}
+            if(cloud.view().state==CloudState::ready&&!streamAttempted){streamAttempted=true;inputQueue.clear();stream.start(cloud.session(),id);}
             if(stream.active()){
-                stream.tick(now);PS5_PadData padState{};pthread_mutex_lock(&viewMutex);padState=publishedPad;pthread_mutex_unlock(&viewMutex);stream.input(padState,now);
+                stream.tick(now);PS5_PadData padState{};pthread_mutex_lock(&viewMutex);padState=publishedPad;pthread_mutex_unlock(&viewMutex);stream.input(padState,now);stream.events(inputQueue,now);
             }
             if(stream.failed()) {
                 std::snprintf(streamFailure,sizeof(streamFailure),"%s",stream.status());
@@ -271,6 +282,7 @@ void* worker(void*) {
         }
 #ifndef OPENNOW_HOST_PREVIEW
         publishedStream=stream.active();
+        publishedInputReady=stream.inputReady();
         if(streamAttempted)std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"%s",stream.status());
 #endif
         pthread_mutex_unlock(&viewMutex);
@@ -327,13 +339,13 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     unsigned pressed=0;
     if (pad>=0 && scePadReadState(pad,&data)==0 && data.connected) {
         pressed=data.buttons & ~lastButtons; lastButtons=data.buttons;
-    } else lastButtons=0;
+    } else {lastButtons=0;data=PS5_PadData{};}
     static opennow::View v;
     static opennow::CloudView cv,lv;
-    bool streaming=false,sessionOwned=false,streamFailed=false;
+    bool streaming=false,inputReady=false,sessionOwned=false,streamFailed=false;
     StreamProfile profile,launchProfile;unsigned profileMask=0;opennow::ui::SettingsInfo settings;
     pthread_mutex_lock(&viewMutex);
-    v=published;cv=publishedCloud;lv=publishedLibrary;publishedPad=data;streaming=publishedStream;sessionOwned=publishedSession;
+    v=published;cv=publishedCloud;lv=publishedLibrary;streaming=publishedStream;inputReady=publishedInputReady;sessionOwned=publishedSession;
     streamFailed=publishedStreamFailure;profile=publishedProfile;launchProfile=publishedLaunchProfile;profileMask=publishedProfileMask;settings=publishedSettings;
     pthread_mutex_unlock(&viewMutex);
     if(pendingDefault>=0&&static_cast<int>(profile)==pendingDefault)pendingDefault=-1;
@@ -343,6 +355,40 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     syncBrowser(Section::library,lv);
     syncBrowser(Section::browse,cv);
     if(v.state!=State::authenticated||streaming||sessionOwned){searchInput.open=false;detailOpen=false;confirmSignOut=false;}
+    const bool typing=keyboard.open;
+    const bool padLost=padConnected&&!data.connected;
+    padConnected=data.connected;
+    if(padLost||!streaming)keyboard.hide();
+    suppressed&=data.buttons;
+    if(streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TRIANGLE)) {
+        if(keyboard.open)keyboard.hide();
+        else keyboard.show();
+        pressed&=~PS5_PAD_BUTTON_TRIANGLE;
+    } else if(keyboard.open) {
+        if(pressed&PS5_PAD_BUTTON_LEFT)keyboard.move(-1,0);
+        if(pressed&PS5_PAD_BUTTON_RIGHT)keyboard.move(1,0);
+        if(pressed&PS5_PAD_BUTTON_UP)keyboard.move(0,-1);
+        if(pressed&PS5_PAD_BUTTON_DOWN)keyboard.move(0,1);
+        if(inputReady&&(pressed&PS5_PAD_BUTTON_CROSS))keyboard.press(keyboard.selected,inputQueue);
+        if(inputReady&&(pressed&PS5_PAD_BUTTON_SQUARE))keyboard.press(opennow::StreamKeyboard::backspaceKey,inputQueue);
+        if(inputReady&&(pressed&PS5_PAD_BUTTON_TRIANGLE))keyboard.press(opennow::StreamKeyboard::spaceKey,inputQueue);
+        if(pressed&PS5_PAD_BUTTON_L1)keyboard.shift=!keyboard.shift;
+        if(pressed&PS5_PAD_BUTTON_CIRCLE)keyboard.hide();
+        pressed&=PS5_PAD_BUTTON_TOUCH_PAD;
+    } else if(streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_SQUARE)) {
+        backHeld=true;suppressed|=PS5_PAD_BUTTON_OPTIONS|PS5_PAD_BUTTON_SQUARE;pressed&=~PS5_PAD_BUTTON_SQUARE;
+    }
+    if(typing&&!keyboard.open)suppressed|=data.buttons;
+    if(padLost||typing!=keyboard.open){inputQueue.cancel();sentMouse=0;}
+    backHeld=backHeld&&streaming&&!keyboard.open&&(data.buttons&PS5_PAD_BUTTON_SQUARE);
+    PS5_PadData gamePad=data;
+    gamePad.buttons=(data.buttons&~(PS5_PAD_BUTTON_TOUCH_PAD|suppressed))|(backHeld?PS5_PAD_BUTTON_TOUCH_PAD:0);
+    if(keyboard.open)gamePad=PS5_PadData{};
+    const auto motion=touchMouse.update(data,streaming&&inputReady&&!keyboard.open);
+    inputQueue.move(motion.dx,motion.dy);
+    if(sentMouse&&sentMouse!=touchMouse.held&&inputQueue.button(sentMouse,false))sentMouse=0;
+    if(!sentMouse&&touchMouse.held&&inputQueue.button(touchMouse.held,true))sentMouse=touchMouse.held;
+    pthread_mutex_lock(&viewMutex);publishedPad=gamePad;pthread_mutex_unlock(&viewMutex);
     const auto screenNow=[&]{return opennow::ui::screenFor({v,cv,lv,section,streaming,sessionOwned,streamFailed,searchInput.open,detailOpen});};
     Screen screen=screenNow();
     if(screen!=Screen::detail)detailOpen=false;
@@ -458,24 +504,25 @@ bool draw(ps5::demo::Canvas& c) noexcept {
             }
         }
     }
-    screen=screenNow();
+    screen=keyboard.open?Screen::keyboard:screenNow();
     if(confirmSignOut&&screen!=Screen::settings)confirmSignOut=false;
 #ifndef OPENNOW_HOST_PREVIEW
-    if(streaming&&media.frames.load())return media.draw(c);
+    if(streaming&&media.frames.load()&&!keyboard.open)return media.draw(c);
 #endif
     static opennow::CloudView previousCloud,previousLibrary;
     static opennow::View previous;
     static StreamProfile previousProfile=StreamProfile::quality;
     static unsigned previousMask=0,previousArt=~0U;
     static opennow::ui::SettingsInfo previousSettings;
-    static bool first=true;
+    static bool first=true,previousReady=false,previousKeyboard=false;
     const unsigned artGeneration=artCache?artCache->generation():0;
     if(!first&&!input&&artGeneration==previousArt&&std::memcmp(&previous,&v,sizeof(v))==0&&
        std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&std::memcmp(&previousLibrary,&lv,sizeof(lv))==0&&
-       previousProfile==defaultProfile&&previousMask==profileMask&&std::memcmp(&previousSettings,&settings,sizeof(settings))==0)
+       previousProfile==defaultProfile&&previousMask==profileMask&&std::memcmp(&previousSettings,&settings,sizeof(settings))==0&&
+       previousReady==inputReady&&previousKeyboard==keyboard.open)
         return false;
     first=false;previous=v;previousCloud=cv;previousLibrary=lv;previousProfile=defaultProfile;previousMask=profileMask;
-    previousSettings=settings;previousArt=artGeneration;
+    previousSettings=settings;previousArt=artGeneration;previousReady=inputReady;previousKeyboard=keyboard.open;
 #ifndef OPENNOW_HOST_PREVIEW
     const char* output=opennow::gpu::outputLabel();
 #else
@@ -484,7 +531,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     const Section shownSection=screen==Screen::detail?detailSection:section;
     opennow::ui::render(c,{screen,shownSection,v,cv,lv,screen==Screen::detail?detailProfile:defaultProfile,launchProfile,profileMask,
         browserFor(shownSection).focus,searchInput,shownSearch,output,streaming,settingsPane,settingsContent,settingsRow,confirmSignOut,
-        settings,artCache,++artFrame});
+        settings,artCache,++artFrame,keyboard,inputReady});
     return true;
 }
 #ifdef OPENNOW_HOST_PREVIEW
@@ -599,6 +646,11 @@ int main() {
     } else if(name=="connecting") {
         publishedCloud.state=CloudState::ready;publishedSession=true;publishedStream=true;
         std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Negotiating secure media connection");
+    } else if(name.rfind("keyboard",0)==0) {
+        publishedCloud.state=CloudState::ready;publishedSession=true;publishedStream=true;publishedInputReady=name!="keyboard-waiting";
+        keyboard.show();
+        keyboard.selected=33;
+        if(name=="keyboard-modifiers"){keyboard.caps=true;keyboard.ctrl=true;keyboard.selected=30;}
     } else if(name=="cleanup-failed") {
         publishedCloud.state=CloudState::failed;publishedSession=true;publishedStreamFailure=true;
         std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"WebRTC: failed | Cleanup: Unable to stop cloud session");

@@ -21,6 +21,8 @@ ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc 
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/catalog_search_test.cpp -o build/host-tests/catalog-search-test
 build/host-tests/catalog-search-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/stream_input_test.cpp -o build/host-tests/stream-input-test
+build/host-tests/stream-input-test
 ${CC:-cc} -O1 -g -fsanitize=address,undefined -c src/vendor/qrcodegen.c -o build/host-tests/qrcode.o
 link_flags=(-Wl,--gc-sections)
 if [[ $(uname -s) == Darwin ]]; then link_flags=(-Wl,-dead_strip); fi

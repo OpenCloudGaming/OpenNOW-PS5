@@ -5,13 +5,14 @@
 #include "../cloud.hpp"
 #include "../catalog_search.hpp"
 #include "../stream/stream_settings.hpp"
+#include "../input/stream_keyboard.hpp"
 #include "artwork.hpp"
 
 namespace opennow::ui {
 enum class Section { library, browse, settings };
 enum class Screen {
     signIn, catalogLoading, catalogEmpty, catalogError, grid, search, detail, settings,
-    launching, connecting, cleanupFailed, streamEnded, launchFailed
+    launching, connecting, cleanupFailed, streamEnded, launchFailed, keyboard
 };
 enum class SettingsPane { stream, display, account, about };
 constexpr unsigned gridColumns=6;
@@ -61,6 +62,8 @@ struct Model {
     SettingsInfo settings;
     art::Cache* art;
     unsigned frame;
+    const StreamKeyboard& keyboard;
+    bool inputReady;
 };
 void render(ps5::demo::Canvas& canvas, const Model& model) noexcept;
 }

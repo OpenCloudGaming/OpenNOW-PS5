@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string_view>
+#include <utility>
 
 namespace opennow::ui {
 namespace {
@@ -114,7 +115,7 @@ float optionsPill(Canvas& c, float x, float cy, Color fill=raised, Color color=i
 }
 float touchPill(Canvas& c, float x, float cy) {c.roundRect(x,cy-22,58,44,10,raised);glyph(c,Glyph::touch,x+29,cy,ink);return 58;}
 
-enum class HintKind { glyph, pill, optionsMint, chord, hold };
+enum class HintKind { glyph, pill, optionsMint, chord, hold, combo };
 struct Hint { HintKind kind; Glyph icon; const char* key; const char* text; };
 constexpr float hintLabel=24;
 float hintWidth(const Hint& h) {
@@ -125,6 +126,7 @@ float hintWidth(const Hint& h) {
     case HintKind::optionsMint: return 48+12+text;
     case HintKind::chord: return pillWidth("L1")+8+pillWidth("R1")+12+text;
     case HintKind::hold: return textWidth(Face::bold,22,"Hold")+10+48+10+textWidth(Face::black,20,"+")+10+58+12+text;
+    case HintKind::combo: return 48+10+textWidth(Face::black,20,"+")+10+44+12+text;
     }
     return text;
 }
@@ -138,6 +140,8 @@ void drawHint(Canvas& c, const Hint& h, float x) {
     case HintKind::hold:
         x+=label(c,Face::bold,22,x,hintY,"Hold",muted)+10;x+=optionsPill(c,x,hintY)+10;
         x+=label(c,Face::black,20,x,hintY,"+",dim)+10;x+=touchPill(c,x,hintY)+12;break;
+    case HintKind::combo:
+        x+=optionsPill(c,x,hintY)+10;x+=label(c,Face::black,20,x,hintY,"+",dim)+10;x+=well(c,h.icon,x,hintY)+12;break;
     }
     label(c,Face::bold,hintLabel,x,hintY,h.text,ink);
 }
@@ -584,9 +588,55 @@ void progress(Canvas& c, const Model& m) {
         const float uw=textWidth(Face::bold,24,"updates live");
         label(c,Face::bold,24,cx-uw/2,cy+138,"updates live",muted);
     }
-    drawFitted(c,Face::mono,22,left,baselineIn(Face::mono,22,hintY-16,32),cv.message,980,dim);
+    drawFitted(c,Face::mono,22,left,baselineIn(Face::mono,22,m.streaming?hintY-86:hintY-16,32),cv.message,980,dim);
+    const Hint l[]={{HintKind::glyph,Glyph::touch,nullptr,"Mouse"},{HintKind::combo,Glyph::triangle,nullptr,"Keyboard"},{HintKind::combo,Glyph::square,nullptr,"Back"}};
     const Hint r[]={{HintKind::hold,Glyph::options,nullptr,m.streaming?"End session":"Cancel session"}};
-    hints(c,nullptr,0,r,1);
+    hints(c,l,m.streaming?3:0,r,1);
+}
+
+void streamKeyboard(Canvas& c, const Model& m) {
+    const auto& k=m.keyboard;
+    char tag[192];
+    if(*m.session.current.title)std::snprintf(tag,sizeof(tag),"KEYBOARD \xC2\xB7 TYPING INTO %s",m.session.current.title);
+    else std::snprintf(tag,sizeof(tag),"KEYBOARD \xC2\xB7 TYPING INTO YOUR GAME");
+    for(char* p=tag;*p;++p)if(*p>='a'&&*p<='z')*p=static_cast<char>(*p-32);
+    drawFitted(c,Face::extrabold,22,left,baselineIn(Face::extrabold,22,193,24),tag,width,mint,0.14f);
+    c.roundRect(left,240,width,120,24,mint);
+    c.roundRect(left,240,width,116,24,surface);
+    char state[48]="NO MODIFIERS";
+    std::size_t at=0;
+    for(const auto& [on,name]:{std::pair{k.shift,"SHIFT"},std::pair{k.caps,"CAPS LOCK"},std::pair{k.ctrl,"CTRL"},std::pair{k.alt,"ALT"}})
+        if(on)at+=std::snprintf(state+at,sizeof(state)-at,"%s%s",at?" + ":"",name);
+    const float stateW=labelRight(c,Face::extrabold,22,right-36,300,state,at?mint:dim,0.14f);
+    drawFitted(c,Face::black,56,left+36,baselineIn(Face::black,56,300-40,80),m.inputReady?"Keys go straight to your game":"Waiting for game input",
+        width-72-stateW-48,m.inputReady?muted:amber,-0.01f);
+    const float pitch=width/StreamKeyboard::units;
+    for(unsigned i=0;i<StreamKeyboard::count;++i) {
+        const auto& key=StreamKeyboard::keys[i];
+        const float x=left+StreamKeyboard::column(i)*pitch, y=396+StreamKeyboard::row(i)*96.0f, w=key.width*pitch-12;
+        const bool focused=i==k.selected, latched=k.latched(i);
+        if(focused)c.roundRectStroke(x-9,y-9,w+18,102,25,4,mint);
+        c.roundRect(x,y,w,84,16,focused?mint:latched?mix(surface,mint,0.24f):surface);
+        const Color color=focused?mintInk:latched?mint:m.inputReady?ink:dim;
+        if(key.vk>=0x25&&key.vk<=0x28) {
+            const float cx=x+w/2, cy=y+42, dx=key.vk==0x25?-1.0f:key.vk==0x27?1.0f:0.0f, dy=key.vk==0x26?-1.0f:key.vk==0x28?1.0f:0.0f;
+            c.line(cx-dx*13,cy-dy*13,cx+dx*13,cy+dy*13,4,color);
+            c.line(cx+dx*13,cy+dy*13,cx+dx*3-dy*10,cy+dy*3+dx*10,4,color);
+            c.line(cx+dx*13,cy+dy*13,cx+dx*3+dy*10,cy+dy*3-dx*10,4,color);
+            continue;
+        }
+        const char* name=k.label(i);
+        const bool word=name[1]!=0;
+        const Face face=word?Face::bold:Face::extrabold;
+        const float size=word?26:36, kw=textWidth(face,size,name);
+        label(c,face,size,x+w/2-kw/2,y+42,name,color);
+    }
+    label(c,Face::semibold,24,left,912,m.inputReady?"The picture returns when you close the keyboard. Your game and audio keep running.":
+        "Key presses are ignored until the game\xE2\x80\x99s input channel opens. The picture returns when you close the keyboard.",dim);
+    const Hint l[]={{HintKind::glyph,Glyph::dpad,nullptr,"Move"},{HintKind::glyph,Glyph::cross,nullptr,"Press key"},
+        {HintKind::glyph,Glyph::square,nullptr,"Backspace"},{HintKind::glyph,Glyph::triangle,nullptr,"Space"},{HintKind::pill,Glyph::cross,"L1","Shift"}};
+    const Hint r[]={{HintKind::glyph,Glyph::circle,nullptr,"Back to game"}};
+    hints(c,l,5,r,1);
 }
 
 void failure(Canvas& c, const Model& m) {
@@ -866,6 +916,7 @@ void render(Canvas& c, const Model& m) noexcept {
     case Screen::detail: detail(c,m);break;
     case Screen::settings: settings(c,m);break;
     case Screen::launching: case Screen::connecting: progress(c,m);break;
+    case Screen::keyboard: streamKeyboard(c,m);break;
     }
 }
 }
