@@ -36,13 +36,14 @@ struct ModifierKey{std::uint8_t bit;std::uint16_t vk,scan;};
 constexpr ModifierKey modifierKeys[]={{modifierShift,0xa0,0x2a},{modifierCtrl,0x11,0x1d},{modifierAlt,0x12,0x38}};
 }
 bool Stream::start(const Session& s,const char* device) {
+ if(validateSettings(s.settings)!=SettingsError::none){stop();fail("Invalid stream settings");return false;}
  qos_={};nextQos_=0;qosRequested_=false;
- stop();opennow_media_note("START " OPENNOW_VERSION);entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;keyHeld_=false;mouseHeld_=0;keyUpAt_=nextKeyAt_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
- capture_.arm(OPENNOW_STORAGE_ROOT,settings_.codec==VideoCodec::hevc,sceKernelGetProcessTime());
+ stop();opennow_media_note("START " OPENNOW_VERSION);entropyFailed=false;session_=s;settings_=s.settings;name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;keyHeld_=false;mouseHeld_=0;keyUpAt_=nextKeyAt_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
+ capture_.arm(OPENNOW_STORAGE_ROOT,settings_.codec()==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){fail("Invalid secure signaling endpoint");release();return false;}
  if(!media_.start(settings_)){fail("Could not initialize video decoder / audio output");release();return false;}
  if(peer_init()!=0){fail("WebRTC runtime initialization failed");release();return false;}runtimeReady_=true;
- PeerConfiguration config{};config.video_codec=settings_.codec==VideoCodec::hevc?CODEC_HEVC:CODEC_H264;config.audio_codec=CODEC_OPUS;config.datachannel=DATA_CHANNEL_STRING;config.user_data=this;config.onvideopacket=video;config.onaudiopacket=audio;
+ PeerConfiguration config{};config.video_codec=settings_.codec()==VideoCodec::hevc?CODEC_HEVC:CODEC_H264;config.audio_codec=CODEC_OPUS;config.datachannel=DATA_CHANNEL_STRING;config.user_data=this;config.onvideopacket=video;config.onaudiopacket=audio;
  config.ice_servers[0].urls="stun:s1.stun.gamestream.nvidia.com:19308";
  peer_connection_set_diagnostics_enabled(0);pc_=peer_connection_create(&config);
  if(!pc_||entropyFailed){fail("Unable to initialize WebRTC");release();return false;}
@@ -74,7 +75,7 @@ void Stream::release() {
   mouseHeld_=0;PS5_PadData neutral{};input(neutral,at);peer_connection_close(pc_);peer_connection_destroy(pc_);pc_=nullptr;}
  if(ws_){ws_->disconnect();delete ws_;ws_=nullptr;}
  if(runtimeReady_){peer_deinit();runtimeReady_=false;}
- media_.stop();secureErase(&session_,sizeof(session_));inputReady_=false;answerSent_=false;candidates_.clear();candidateMid_.clear();candidateMLine_=0;
+ media_.stop();secureErase(&session_,sizeof(session_));session_={};inputReady_=false;answerSent_=false;candidates_.clear();candidateMid_.clear();candidateMLine_=0;
 }
 void Stream::send(cJSON* root){char* value=cJSON_PrintUnformatted(root);if(value&&ws_)ws_->send_message(value);cJSON_free(value);}
 void Stream::payload(cJSON* value){if(!ws_)return;char* data=cJSON_PrintUnformatted(value);if(!data)return;auto* root=cJSON_CreateObject();auto* msg=cJSON_AddObjectToObject(root,"peer_msg");cJSON_AddNumberToObject(msg,"from",peerId_);cJSON_AddNumberToObject(msg,"to",remoteId_);cJSON_AddStringToObject(msg,"msg",data);cJSON_AddNumberToObject(root,"ackid",++ack_);send(root);cJSON_Delete(root);cJSON_free(data);}
@@ -116,7 +117,7 @@ void Stream::recoverVideoLoss(){
  PeerVideoRtpStats stats{};peer_connection_get_video_rtp_stats(pc_,&stats);
  if(stats.access_units_dropped!=lastVideoLoss_){lastVideoLoss_=stats.access_units_dropped;media_.requireKeyframe();}
 }
-void Stream::video(const PeerVideoPacket* p,void* ctx){auto& self=*static_cast<Stream*>(ctx);self.recoverVideoLoss();if(p){self.qos_.received(p->size);const auto now=sceKernelGetProcessTime();self.capture_.receive(p->data,p->size,now,self.capture_.wantsIdr(now)&&video::Recovery::hasIdr(p->data,p->size,self.settings_.codec==VideoCodec::hevc));if(!self.media_.video(p->data,p->size)){if(now-self.keyframeRequested_>=250000){peer_connection_request_video_keyframe(self.pc_);self.keyframeRequested_=now;}}}}
+void Stream::video(const PeerVideoPacket* p,void* ctx){auto& self=*static_cast<Stream*>(ctx);self.recoverVideoLoss();if(p){self.qos_.received(p->size);const auto now=sceKernelGetProcessTime();self.capture_.receive(p->data,p->size,now,self.capture_.wantsIdr(now)&&video::Recovery::hasIdr(p->data,p->size,self.settings_.codec()==VideoCodec::hevc));if(!self.media_.video(p->data,p->size)){if(now-self.keyframeRequested_>=250000){peer_connection_request_video_keyframe(self.pc_);self.keyframeRequested_=now;}}}}
 void Stream::audio(const PeerAudioPacket* p,void* ctx){if(p)static_cast<Stream*>(ctx)->media_.audio(p->data,p->size,p->sequence,p->payload_type,p->timestamp);}
 void Stream::dataMessage(char* data,std::size_t size,void* ctx,std::uint16_t sid){static_cast<Stream*>(ctx)->data(data,size,sid);}
 void Stream::dataOpen(void* ctx){auto& self=*static_cast<Stream*>(ctx);if(peer_connection_create_datachannel_sid(self.pc_,DATA_CHANNEL_RELIABLE,0,0,const_cast<char*>("input_channel_v1"),const_cast<char*>(""),0)>=0&&!self.inputOpened_)self.inputOpened_=sceKernelGetProcessTime();}
@@ -130,7 +131,7 @@ void Stream::tick(std::uint64_t now){if(!active())return;if(entropyFailed)fail("
 for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
  if(failed_){release();return;}
  recoverVideoLoss();
- capture_.poll(OPENNOW_STORAGE_ROOT,settings_.codec==VideoCodec::hevc,now);
+ capture_.poll(OPENNOW_STORAGE_ROOT,settings_.codec()==VideoCodec::hevc,now);
  // The existing input stream stays on SID 0. QoS uses the source-pinned,
  // unordered 300 ms NVST control stream on SID 6, after DCEP acknowledgment.
  if(inputReady_&&!qosRequested_){
@@ -148,7 +149,7 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
    char qosNote[120];std::snprintf(qosNote,sizeof(qosNote),"NVST QoS open=%d queued=%u newestTimestamp=%u",peer_connection_datachannel_is_open(pc_,6),qos_.queuedCount(),stats.latest_rtp_timestamp);opennow_media_note(qosNote);
    std::snprintf(qosNote,sizeof(qosNote),"CAPTURE bytes=%zu complete=%d",capture_.bytes(),capture_.done());if(capture_.bytes())opennow_media_note(qosNote);
    char diagnostic[384];std::snprintf(diagnostic,sizeof(diagnostic),"RTP total=%u decryptFail=%u unmatched=%u videoRouted=%u h264=%u decoded=%u error=%d",stats.transport_rtp,stats.decrypt_failures,stats.unmatched,stats.video_routed,stats.packets_received,media_.frames.load(),media_.decodeError.load());opennow_media_note(diagnostic);
-   std::snprintf(diagnostic,sizeof(diagnostic),"PRESENTER frames=%u hardware=%d hdr=%d",media_.presented.load(),settings_.hardware,media_.actualHdr.load());opennow_media_note(diagnostic);
+   std::snprintf(diagnostic,sizeof(diagnostic),"PRESENTER frames=%u hardware=%d hdr=%d",media_.presented.load(),settings_.hardware(),media_.actualHdr.load());opennow_media_note(diagnostic);
    std::snprintf(diagnostic,sizeof(diagnostic),"VIDEO quality actual=%dx%d bytes=%u idr=%u / AU lost=%u gaps=%u late=%u skips=%u nack=%u / QUEUE lost=%u corrupt=%u resets=%u",
     media_.decodedWidth.load(),media_.decodedHeight.load(),media_.videoBytes.load(),media_.idrFrames.load(),
     stats.access_units_dropped,stats.sequence_gaps,stats.late_packets_dropped,stats.forced_sequence_skips,stats.nack_requests,
@@ -168,7 +169,7 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
      stats.access_units_completed,media_.queueDepth.load(),media_.queuePeak.load(),static_cast<unsigned long long>(media_.queueMaxUs.load()),media_.decodeCalls.load(),static_cast<unsigned long long>(media_.decodeUs.load()),static_cast<unsigned long long>(media_.decodeMaxUs.load()),media_.gpuCalls.load(),static_cast<unsigned long long>(media_.gpuUs.load()),static_cast<unsigned long long>(media_.gpuMaxUs.load()));
     const auto t=media_.nativeTiming();
     std::fprintf(live,"target_fps=%d target_hdr=%d codec=%d native_copy_us=%llu native_publish_us=%llu native_decode_us=%llu native_flush_us=%llu native_decode_calls=%llu native_flush_calls=%llu native_blocked_attempts=%llu native_worker_mask=%llu native_pipeline_depth=%u native_inflight=%u\n",
-     settings_.fps,settings_.hdr,static_cast<int>(settings_.codec),static_cast<unsigned long long>(t.copy_us),static_cast<unsigned long long>(t.publish_us),static_cast<unsigned long long>(t.decode_us),static_cast<unsigned long long>(t.flush_us),static_cast<unsigned long long>(t.decode_calls),static_cast<unsigned long long>(t.flush_calls),static_cast<unsigned long long>(t.blocked_attempts),static_cast<unsigned long long>(t.worker_mask),t.pipeline_depth,t.in_flight);
+     settings_.fps,settings_.hdr(),static_cast<int>(settings_.codec()),static_cast<unsigned long long>(t.copy_us),static_cast<unsigned long long>(t.publish_us),static_cast<unsigned long long>(t.decode_us),static_cast<unsigned long long>(t.flush_us),static_cast<unsigned long long>(t.decode_calls),static_cast<unsigned long long>(t.flush_calls),static_cast<unsigned long long>(t.blocked_attempts),static_cast<unsigned long long>(t.worker_mask),t.pipeline_depth,t.in_flight);
     std::fclose(live);
    }
    if(!media_.frames&&now-keyframeRequested_>=2000000){peer_connection_request_video_keyframe(pc_);keyframeRequested_=now;}

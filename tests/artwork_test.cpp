@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ui/artwork.hpp"
+#include "ui/artwork_disk.hpp"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <pthread.h>
 #include <string>
 #include <vector>
@@ -55,6 +57,12 @@ struct Stub {
     std::atomic_bool waitForStop{false};
     std::atomic_uint calls{0};
     std::atomic_bool entered{false};
+};
+struct Temp {
+    char parent[64]="/tmp/opennow-artwork-cache-XXXXXX";
+    std::string root;
+    Temp(){assert(mkdtemp(parent));root=std::string(parent)+"/artwork";}
+    ~Temp(){art::DiskCache disk(root.c_str());disk.clear();assert(rmdir(root.c_str())==0);assert(rmdir(parent)==0);}
 };
 bool fetch(void* context,const char* url,unsigned char* buffer,std::size_t capacity,std::size_t& size,const std::atomic_bool& stop) noexcept {
     auto& stub=*static_cast<Stub*>(context);
@@ -239,5 +247,120 @@ int main() {
         assert(pthread_join(thread,nullptr)==0);
         assert(cache.stopping()&&!cache.step());
     }
-    std::puts("Artwork URL, decode bounds, cache lifetime and cancellation regressions passed");
+    {
+        Temp temp;Stub network;
+        {
+            art::Cache cache(fetch,&network,temp.root.c_str());
+            assert(access(temp.root.c_str(),F_OK)!=0);
+            const auto initial=cache.diskStats();assert(initial.enabled&&!initial.available&&initial.busy);
+            cache.want(box,art::Kind::tile,1);assert(cache.step());
+            assert(cache.want(box,art::Kind::tile,2)==art::State::ready&&network.calls==1);
+            const auto stats=cache.diskStats();
+            assert(stats.enabled&&stats.available&&!stats.busy&&!stats.error&&stats.count==1);
+            assert(stats.bytes==sizeof(jpeg)+sizeof(art::DiskCache::Header));
+        }
+        network.fail=true;
+        {
+            art::Cache cache(fetch,&network,temp.root.c_str());
+            cache.want(box,art::Kind::tile,1);assert(cache.step());
+            assert(cache.want(box,art::Kind::tile,2)==art::State::ready&&network.calls==1);
+            cache.want(box,art::Kind::hero,3);assert(cache.step());
+            assert(cache.want(box,art::Kind::hero,4)==art::State::failed&&network.calls==2);
+        }
+        {
+            art::Cache cache(fetch,&network,temp.root.c_str());cache.setDiskEnabled(false);
+            cache.want(box,art::Kind::tile,1);assert(cache.step());
+            assert(cache.want(box,art::Kind::tile,2)==art::State::failed&&network.calls==3);
+            assert(!cache.diskStats().enabled&&!cache.diskStats().busy);
+            cache.setDiskEnabled(true);assert(cache.step());
+            assert(cache.want(box,art::Kind::tile,3)==art::State::ready&&network.calls==3);
+        }
+        {
+            art::Cache cache(fetch,&network,temp.root.c_str());
+            cache.setDiskEnabled(false);cache.setDiskEnabled(true);
+            cache.want(box,art::Kind::tile,1);assert(cache.step());
+            assert(cache.want(box,art::Kind::tile,2)==art::State::ready&&network.calls==3);
+            cache.setDiskEnabled(false);cache.setPaused(true);cache.requestDiskClear();
+            assert(cache.diskStats().busy);assert(cache.step());
+            const auto cleared=cache.diskStats();
+            assert(!cleared.enabled&&!cleared.busy&&cleared.count==0&&cleared.bytes==0);
+            assert(cache.want(box,art::Kind::tile,3)==art::State::loading);
+            cache.setDiskEnabled(true);cache.setPaused(false);network.fail=false;
+            assert(cache.step());assert(cache.want(box,art::Kind::tile,4)==art::State::ready&&network.calls==4);
+        }
+        const auto slot=temp.root+"/slot-000.bin";
+        assert(truncate(slot.c_str(),sizeof(art::DiskCache::Header)+20)==0);
+        {
+            art::Cache cache(fetch,&network,temp.root.c_str());cache.want(box,art::Kind::tile,1);
+            assert(cache.step()&&cache.want(box,art::Kind::tile,2)==art::State::ready&&network.calls==5);
+            assert(cache.diskStats().error&&cache.diskStats().count==1);
+        }
+        {
+            art::DiskCache disk(temp.root.c_str());
+            std::vector<unsigned char> buffer(art::DiskCache::slotBytes);
+            disk.initialize(buffer.data(),buffer.size());
+            const unsigned char invalid[]={1,2,3,4};
+            assert(art::requestUrl(box,art::Kind::tile,url,sizeof(url)));
+            disk.put(url,0,invalid,sizeof(invalid));
+            art::Cache cache(fetch,&network,temp.root.c_str());cache.want(box,art::Kind::tile,1);
+            assert(cache.step()&&cache.want(box,art::Kind::tile,2)==art::State::ready&&network.calls==6);
+            assert(cache.diskStats().count==1&&cache.diskStats().error);
+        }
+    }
+    {
+        Temp temp;
+        const auto oversized=[](void*,const char*,unsigned char* buffer,std::size_t capacity,std::size_t& size,const std::atomic_bool&) noexcept {
+            size=art::DiskCache::payloadBytes+1;assert(size<=capacity);
+            std::memset(buffer,0,size);std::memcpy(buffer,jpeg,sizeof(jpeg));return true;
+        };
+        art::Cache cache(oversized,nullptr,temp.root.c_str());cache.want(box,art::Kind::tile,1);
+        assert(cache.step()&&cache.want(box,art::Kind::tile,2)==art::State::ready);
+        assert(cache.diskStats().available&&cache.diskStats().count==0);
+    }
+    for(const char* root:{"/opennow-test-missing-parent-019811/artwork","/sys/opennow-artwork-test"}) {
+        Stub network;art::Cache cache(fetch,&network,root);cache.want(box,art::Kind::tile,1);
+        assert(cache.step()&&cache.want(box,art::Kind::tile,2)==art::State::ready);
+        const auto stats=cache.diskStats();assert(stats.enabled&&!stats.available&&stats.error&&!stats.busy);
+    }
+    {
+        Temp temp;
+        struct Gate {std::atomic_bool entered{false},cancelled{false},release{false};std::atomic_uint calls{0};} gate;
+        const auto gated=[](void* context,const char*,unsigned char* buffer,std::size_t,std::size_t& size,const std::atomic_bool& cancel) noexcept {
+            auto& gate=*static_cast<Gate*>(context);gate.calls.fetch_add(1);gate.entered.store(true);
+            while(!cancel.load())usleep(500);
+            gate.cancelled.store(true);
+            while(!gate.release.load())usleep(500);
+            std::memcpy(buffer,jpeg,sizeof(jpeg));size=sizeof(jpeg);return true;
+        };
+        art::Cache cache(gated,&gate,temp.root.c_str());cache.want(box,art::Kind::tile,1);
+        pthread_t worker;assert(pthread_create(&worker,nullptr,&art::Cache::run,&cache)==0);
+        while(!gate.entered.load())usleep(500);
+        cache.requestDiskClear();
+        while(!gate.cancelled.load())usleep(500);
+        assert(cache.diskStats().busy);cache.setPaused(true);gate.release.store(true);
+        for(unsigned i=0;i<2000&&cache.diskStats().busy;++i)usleep(1000);
+        assert(!cache.diskStats().busy&&cache.diskStats().count==0&&gate.calls==1);
+        assert(cache.want(box,art::Kind::tile,2)==art::State::loading);
+        cache.requestStop();assert(pthread_join(worker,nullptr)==0);
+        Stub offline;offline.fail=true;art::Cache reopened(fetch,&offline,temp.root.c_str());
+        reopened.want(box,art::Kind::tile,1);assert(reopened.step());
+        assert(reopened.want(box,art::Kind::tile,2)==art::State::failed&&offline.calls==1);
+    }
+    {
+        Temp temp;Stub network;art::Cache cache(fetch,&network,temp.root.c_str());
+        pthread_t worker;assert(pthread_create(&worker,nullptr,&art::Cache::run,&cache)==0);
+        for(unsigned frame=1;frame<400;++frame) {
+            char name[160];std::snprintf(name,sizeof(name),"https://img.nvidiagrid.net/apps/%u/ZZ/GAME_BOX_ART_01_y.jpg",frame%50);
+            cache.want(name,art::Kind::tile,frame);
+            if(frame%29==0)cache.requestDiskClear();
+            if(frame%11==0)cache.setDiskEnabled(frame%22==0);
+            if(frame%13==0)cache.setPaused(frame%26==0);
+            const auto stats=cache.diskStats();
+            assert(stats.count<=128&&stats.bytes<=art::DiskCache::storedBudget);
+            usleep(300);
+        }
+        cache.requestStop();assert(pthread_join(worker,nullptr)==0);
+        assert(cache.stopping()&&!cache.step());
+    }
+    std::puts("Artwork URL, decode bounds, persistent cache, controls, lifetime and cancellation regressions passed");
 }

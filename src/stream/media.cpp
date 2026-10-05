@@ -3,6 +3,7 @@
 #include "AudioRtpUtils.hpp"
 #include "native/gpu_presenter.hpp"
 #include "native/hevc_headers.hpp"
+#include "video_geometry.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -35,13 +36,16 @@ void decoderLog(void*,int level,const char* format,va_list args){
 }
 
 bool Media::start(const StreamSettings& settings) noexcept {
+ if(validateSettings(settings)!=SettingsError::none){stop();return false;}
  stop();settings_=settings;presented=0;actualHdr=false;frames=0;dropped=0;videoUnits=0;audioPackets=0;audioErrors=0;audioRecovered=0;audioConcealed=0;audioUnderruns=0;expectedAudioTimestamp_=0;decodeError=0;read_=used_=0;fresh_=sequenceSeen_=false;recovery_.reset();queueDrops=0;corruptFrames=0;recoveryResets=0;idrFrames=0;decodedWidth=0;decodedHeight=0;videoBytes=0;
  queueDepth=0;queuePeak=0;decodeCalls=0;gpuCalls=0;decodeUs=0;decodeMaxUs=0;queueMaxUs=0;gpuUs=0;gpuMaxUs=0;
- if(settings_.hardware){
+ if(settings_.hardware()){
 #ifdef OPENNOW_GPU
   if(!gpu::available())return false;
-  const auto mode=video::nativeMode(settings_.codec==VideoCodec::hevc?video::NativeCodec::hevc_main10:video::NativeCodec::h264,settings_.width,settings_.height,settings_.fps);
-  if(!mode)return false;nativeMode_=*mode;if(!nativeDecoder_.open(nativeMode_)){decodeError=nativeDecoder_.error();return false;}
+  const auto allocation=gpu::allocationFor(settings_);
+  const auto output=video::nativeMode(settings_);
+  if(!allocation||!output)return false;nativeMode_=*allocation;
+  if(!nativeDecoder_.open(nativeMode_)||!nativeDecoder_.expectOutput(*output)){decodeError=nativeDecoder_.error();nativeDecoder_.close();return false;}
  #else
   return false;
  #endif
@@ -54,9 +58,9 @@ bool Media::start(const StreamSettings& settings) noexcept {
  if(avcodec_open2(codec_,decoder,nullptr)<0){stop();return false;}
  }
  int error=0;opus_=opus_decoder_create(48000,2,&error);
- if(!settings_.hardware)pixels_=static_cast<std::uint32_t*>(std::calloc(1920*1080,4));
- const bool queueReady=compressed_.open(settings_.hardware?8:2,cap,AV_INPUT_BUFFER_PADDING_SIZE);
- if(error||!opus_||(!settings_.hardware&&!pixels_)||!queueReady){stop();return false;}
+ if(!settings_.hardware())pixels_=static_cast<std::uint32_t*>(std::calloc(1920*1080,4));
+ const bool queueReady=compressed_.open(settings_.hardware()?8:2,cap,AV_INPUT_BUFFER_PADDING_SIZE);
+ if(error||!opus_||(!settings_.hardware()&&!pixels_)||!queueReady){stop();return false;}
  sceAudioOutInit();audioHandle_=sceAudioOutOpen(0xff,0,0,256,48000,1);
  if(audioHandle_<0){stop();return false;}
  running_=true;
@@ -91,7 +95,7 @@ bool Media::video(const std::uint8_t* data,std::size_t size) noexcept {
  const auto units=++videoUnits;
  if(units<=3){char note[256];unsigned mask=0;
   for(std::size_t i=0;data&&i+4<size;++i)if(data[i]==0&&data[i+1]==0){if(data[i+2]==1)mask|=1u<<(data[i+3]&31);else if(data[i+2]==0&&data[i+3]==1)mask|=1u<<(data[i+4]&31);}
-  std::snprintf(note,sizeof(note),"VIDEO codec=%s unit=%u bytes=%zu nalTypesMask=%u",settings_.codec==VideoCodec::hevc?"HEVC":"H264",units,size,mask);opennow_media_note(note);
+  std::snprintf(note,sizeof(note),"VIDEO codec=%s unit=%u bytes=%zu nalTypesMask=%u",settings_.codec()==VideoCodec::hevc?"HEVC":"H264",units,size,mask);opennow_media_note(note);
  }
  if(!running_||!data||!size||size>cap)return false;
  pthread_mutex_lock(&lock_);
@@ -100,7 +104,7 @@ bool Media::video(const std::uint8_t* data,std::size_t size) noexcept {
   // An incoming IDR can immediately restore references. Rejecting it here
   // needlessly requested another large IDR and prolonged the reset storm.
  }
- if(!recovery_.accept(data,size,settings_.codec==VideoCodec::hevc)){pthread_mutex_unlock(&lock_);return false;}
+ if(!recovery_.accept(data,size,settings_.codec()==VideoCodec::hevc)){pthread_mutex_unlock(&lock_);return false;}
  const bool queued=compressed_.push(data,size,sceKernelGetProcessTime());queueDepth=compressed_.size();if(queueDepth.load()>queuePeak.load())queuePeak=queueDepth.load();
  if(queued)pthread_cond_signal(&wake_);pthread_mutex_unlock(&lock_);return queued;
 }
@@ -134,7 +138,7 @@ void* Media::decode(void* context) {
   pthread_mutex_lock(&self.lock_);while(!self.compressed_.size()&&self.running_){
 #ifdef OPENNOW_GPU
    const auto timing=self.nativeDecoder_.timing();
-   if(self.settings_.hardware&&timing.pipeline_depth>1&&timing.in_flight&&self.recovery_.current(decoderEpoch)){
+   if(self.settings_.hardware()&&timing.pipeline_depth>1&&timing.in_flight&&self.recovery_.current(decoderEpoch)){
     const auto grace=std::max(20000u,1500000u/unsigned(self.settings_.fps));
     if(sceKernelGetProcessTime()-lastNativeInput>=grace){drainNow=true;break;}
     timespec until{};
@@ -172,12 +176,12 @@ void* Media::decode(void* context) {
   // retains its refcounted packet allocation for delayed frame references.
   const std::uint8_t* data=unit.data;const auto size=unit.size;
  #ifdef OPENNOW_GPU
-  if(self.settings_.hardware){
+  if(self.settings_.hardware()){
    if(decoderEpoch!=packetEpoch){
     pthread_mutex_lock(&self.lock_);self.clearNativePending();while(self.nativeInFlight_)pthread_cond_wait(&self.wake_,&self.lock_);pthread_mutex_unlock(&self.lock_);
     if(!self.nativeDecoder_.reset()){self.decodeError=self.nativeDecoder_.error();av_packet_unref(packet);break;}decoderEpoch=packetEpoch;
    }
-   if(self.settings_.codec==VideoCodec::hevc){
+   if(self.settings_.codec()==VideoCodec::hevc){
     const auto previous=headers;const bool valid=video::updateHevcHeaders(data,size,headers);
     if(headerLogs<3&&(!headerLogs||(previous.width!=headers.width||previous.height!=headers.height||previous.bit_depth!=headers.bit_depth||previous.primaries!=headers.primaries||previous.transfer!=headers.transfer||previous.matrix!=headers.matrix||previous.full_range!=headers.full_range||previous.profile!=headers.profile||previous.valid!=headers.valid))){
      const std::uint8_t* nal=nullptr;std::size_t bytes=0;video::hevcSpsView(data,size,nal,bytes);
@@ -186,13 +190,13 @@ void* Media::decode(void* context) {
     }
     const bool sdr=valid&&headers.primaries==1&&headers.matrix==1&&(headers.transfer==1||headers.transfer==13);
     const auto actual=video::nativeMode(headers.hdr10()?video::NativeCodec::hevc_main10:headers.bit_depth==10?video::NativeCodec::hevc_main10_sdr:video::NativeCodec::hevc,headers.width,headers.height,self.settings_.fps);
-    if(!valid||(!headers.hdr10()&&!sdr)||!actual||headers.profile!=actual->profile||headers.level>self.nativeMode_.level||headers.max_dpb_frames>video::nativeDpbFrames(self.nativeMode_)){
+    if(!valid||(!headers.hdr10()&&!sdr)||!actual||(actual->hdr&&!self.settings_.hdr())||headers.profile!=actual->profile||headers.level>self.nativeMode_.level||headers.max_dpb_frames>video::nativeDpbFrames(self.nativeMode_)){
      self.decodeError=-1001;if(headerLogs==1){opennow_media_note("HEVC color metadata rejected; retaining the last picture");++headerLogs;}av_packet_unref(packet);self.requireKeyframe();continue;
     }
     auto output=*actual;output.full_range=headers.full_range;
     if(!self.nativeDecoder_.expectOutput(output)){self.decodeError=self.nativeDecoder_.error();av_packet_unref(packet);self.requireKeyframe();continue;}
    }
-   if(video::Recovery::hasIdr(data,size,self.settings_.codec==VideoCodec::hevc))++self.idrFrames;
+   if(video::Recovery::hasIdr(data,size,self.settings_.codec()==VideoCodec::hevc))++self.idrFrames;
    const auto decodeStart=sceKernelGetProcessTime();
    video::HardwareDecoder::Picture picture;auto result=self.nativeDecoder_.decode(data,size,unit.received,picture);
    while(result==video::HardwareDecoder::Result::blocked&&self.running_){sceKernelUsleep(1000);result=self.nativeDecoder_.decode(data,size,unit.received,picture);}
@@ -219,7 +223,8 @@ void* Media::decode(void* context) {
    }
    self.decodedWidth=frame->width;self.decodedHeight=frame->height;
    if(frame->width<=0||frame->width>1920||frame->height<=0||frame->height>1080){++self.dropped;av_frame_unref(frame);continue;}
-   self.scaler_=sws_getCachedContext(self.scaler_,frame->width,frame->height,static_cast<AVPixelFormat>(frame->format),1920,1080,AV_PIX_FMT_RGBA,SWS_BILINEAR,nullptr,nullptr,nullptr);
+   const auto viewport=video::fitVideoRect(frame->width,frame->height,1920,1080);
+   self.scaler_=sws_getCachedContext(self.scaler_,frame->width,frame->height,static_cast<AVPixelFormat>(frame->format),viewport.width,viewport.height,AV_PIX_FMT_RGBA,SWS_BILINEAR,nullptr,nullptr,nullptr);
    if(self.scaler_){
     // Honor the stream's YUV range/matrix instead of swscale's SD defaults.
     int matrix=SWS_CS_ITU709;
@@ -229,7 +234,8 @@ void* Media::decode(void* context) {
                             coefficients,1,0,1<<16,1<<16);
     pthread_mutex_lock(&self.lock_);
     if(!self.recovery_.current(packetEpoch)){pthread_mutex_unlock(&self.lock_);av_frame_unref(frame);continue;}
-    std::uint8_t* dst[]={reinterpret_cast<std::uint8_t*>(self.pixels_)};int stride[]={1920*4};sws_scale(self.scaler_,frame->data,frame->linesize,0,frame->height,dst,stride);self.fresh_=true;++self.frames;pthread_mutex_unlock(&self.lock_);}
+    std::fill_n(self.pixels_,1920*1080,video::packedVideoBlack(false));
+    std::uint8_t* dst[]={reinterpret_cast<std::uint8_t*>(self.pixels_+viewport.y*1920+viewport.x)};int stride[]={1920*4};sws_scale(self.scaler_,frame->data,frame->linesize,0,frame->height,dst,stride);self.fresh_=true;++self.frames;pthread_mutex_unlock(&self.lock_);}
    av_frame_unref(frame);
   }
  }
@@ -282,7 +288,7 @@ void* Media::output(void* context) {
 }
 bool Media::draw(ps5::demo::Canvas& c) noexcept {
  #ifdef OPENNOW_GPU
- if(settings_.hardware){
+ if(settings_.hardware()){
   pthread_mutex_lock(&lock_);if(!nativePending_){pthread_mutex_unlock(&lock_);return false;}
   const auto picture=pendingPicture_;nativePending_=false;nativeInFlight_=true;pthread_mutex_unlock(&lock_);
   const auto drawStart=sceKernelGetProcessTime();const bool drawn=gpu::drawVideo(picture.surface,picture.mode);nativeDecoder_.release(picture);

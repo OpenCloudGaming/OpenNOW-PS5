@@ -3,6 +3,7 @@
 #include "gfn.hpp"
 #include "app_storage.h"
 #include "settings_file.hpp"
+#include "ui/stream_store.hpp"
 #include "http.hpp"
 #include "random.hpp"
 #include "cloud.hpp"
@@ -58,8 +59,9 @@ bool publishedStream=false;
 bool publishedInputReady=false;
 bool publishedSession=false;
 bool publishedStreamFailure=false;
-StreamProfile publishedProfile=StreamProfile::quality;
-StreamProfile publishedLaunchProfile=StreamProfile::quality;
+opennow::StreamSettings publishedDefaults{};
+opennow::StreamSettings publishedLaunch{};
+bool artworkWanted=true;
 opennow::ui::SettingsInfo publishedSettings;
 pthread_mutex_t viewMutex=PTHREAD_MUTEX_INITIALIZER;
 std::atomic_int command{0};
@@ -78,20 +80,25 @@ bool backHeld=false;
 bool padConnected=false;
 char pendingSearch[128]{};
 char shownSearch[128]{};
-unsigned publishedProfileMask=0;
-struct Request { int index=-1; int profile=-1; int source=-1; int direction=1; };
+struct Request { int index=-1; int source=-1; int direction=1; bool hasSettings=false; opennow::StreamSettings settings{}; };
 Request pendingRequest;
 struct Browser { unsigned focus=0; unsigned revision=~0U; int target=0; int pending=-1; char id[96]{}; };
 Browser browsers[2];
 Section section=Section::library;
 bool detailOpen=false;
 Section detailSection=Section::library;
-StreamProfile detailProfile=StreamProfile::quality;
+unsigned detailChoice=0;
 SettingsPane settingsPane=SettingsPane::stream;
 bool settingsContent=false;
 unsigned settingsRow=0;
 bool confirmSignOut=false;
-int pendingDefault=-1;
+opennow::StreamSettings draft{};
+opennow::StreamSettings proposal{};
+unsigned draftRevision=0;
+unsigned adjusted=0;
+opennow::ui::NumberEdit numberEdit;
+bool confirmClear=false;
+bool confirmFixed=false;
 Request lastLaunch;
 bool hasLastLaunch=false;
 unsigned artFrame=0;
@@ -106,18 +113,29 @@ int takeCommand(Request& payload) noexcept {
     pthread_mutex_unlock(&viewMutex);
     return action;
 }
-bool acceptProfile(int requested,unsigned mask,StreamProfile& profile) noexcept {
-    if(requested<0||requested>=static_cast<int>(StreamProfile::count)||!(mask&(1U<<requested)))return false;
-    profile=static_cast<StreamProfile>(requested);
-    return true;
+bool acceptSettings(const opennow::StreamSettings& settings) noexcept {
+    return opennow::validateSettings(settings)==opennow::SettingsError::none&&opennow::gpu::settingsAvailable(settings);
 }
-unsigned qualifiedMask() noexcept {
-    unsigned mask=0;
-    for(unsigned i=0;i<static_cast<unsigned>(StreamProfile::count);++i) {
-        const auto candidate=static_cast<StreamProfile>(i);
-        if(!opennow::settingsFor(candidate).hardware||opennow::gpu::profileAvailable(candidate))mask|=1U<<i;
-    }
-    return mask;
+opennow::ui::StreamCaps streamCaps() noexcept {
+    using opennow::VideoMode;
+    const auto mode=[](VideoMode m){return opennow::gpu::settingsAvailable(opennow::ui::modeProbe(m));};
+    return {mode(VideoMode::h264Hardware),mode(VideoMode::hevcMain10SdrHardware),mode(VideoMode::hevcMain10HdrHardware)};
+}
+unsigned launchChoices(const opennow::StreamSettings& defaults,opennow::StreamSettings* out,unsigned capacity) noexcept {
+    StreamProfile presets[static_cast<unsigned>(StreamProfile::count)];
+    const unsigned count=opennow::ui::qualifiedPresets(presets,static_cast<unsigned>(StreamProfile::count),opennow::gpu::settingsAvailable);
+    unsigned n=0;
+    out[n++]=defaults;
+    for(unsigned i=0;i<count&&n<capacity;++i)out[n++]=opennow::settingsFor(presets[i]);
+    return n;
+}
+void rejectLaunch(opennow::CloudView& view,const char* reason,const opennow::Game& game) noexcept {
+    view.launchError=true;view.current=game;
+    std::snprintf(view.message,sizeof(view.message),"Not started: %s",reason);
+}
+void setArtwork(bool enabled) noexcept {
+    pthread_mutex_lock(&viewMutex);const bool changed=artworkWanted!=enabled;artworkWanted=enabled;pthread_mutex_unlock(&viewMutex);
+    if(changed&&artCache)artCache->setDiskEnabled(enabled);
 }
 void publish(const opennow::View& v) {
     pthread_mutex_lock(&viewMutex); published=v; pthread_mutex_unlock(&viewMutex);
@@ -150,27 +168,13 @@ void* worker(void*) {
     login.restore(id,sceKernelGetProcessTime()/1000000);
     bool catalogLoaded=false,streamAttempted=false;
     char streamFailure[192]{};
-#ifndef OPENNOW_HOST_PREVIEW
-    const auto best=opennow::gpu::bestProfile();
-#else
-    const auto best=StreamProfile::quality;
-#endif
-    const unsigned profileMask=qualifiedMask();
-    auto profile=best;
-    auto launchProfile=best;
-    opennow::ui::SettingsInfo settings;
-    {
-        opennow::settingsFile::Saved saved;
-        const auto status=opennow::settingsFile::load(OPENNOW_SETTINGS_PATH,saved);
-        settings.loadCorrupt=status==opennow::settingsFile::Status::corrupt;
-        settings.loadUnreadable=status==opennow::settingsFile::Status::unreadable;
-        if(status==opennow::settingsFile::Status::loaded) {
-            settings.saved=true;
-            if(profileMask&(1U<<static_cast<unsigned>(saved.profile)))profile=saved.profile;
-            else settings.savedUnavailable=true;
-        }
-    }
-    pthread_mutex_lock(&viewMutex);publishedProfileMask=profileMask;publishedProfile=profile;publishedSettings=settings;pthread_mutex_unlock(&viewMutex);
+    opennow::ui::StreamStore store;
+    pthread_mutex_lock(&viewMutex);const bool artworkStart=artworkWanted;pthread_mutex_unlock(&viewMutex);
+    store.load(OPENNOW_SETTINGS_PATH,opennow::gpu::bestSettings(),artworkStart,opennow::gpu::settingsAvailable);
+    auto launchSettings=store.defaults;
+    char rejected[128]{};
+    opennow::Game rejectedGame{};
+    pthread_mutex_lock(&viewMutex);publishedDefaults=store.defaults;publishedSettings=store.info;pthread_mutex_unlock(&viewMutex);
     unsigned publishTick=0;
     for (;;) {
         Request request;
@@ -180,7 +184,7 @@ void* worker(void*) {
 #ifndef OPENNOW_HOST_PREVIEW
             stream.stop();
 #endif
-            streamAttempted=false;
+            streamAttempted=false;rejected[0]=0;
             const bool stopped=!*cloud.session().id||cloud.stop(login.cloudToken(),id);
             if(action==10){ps5::demo::requestStop();return nullptr;}
             if(stopped) {
@@ -204,15 +208,11 @@ void* worker(void*) {
             if (!login.restore(id,sceKernelGetProcessTime()/1000000))
                 login.begin(id,sceKernelGetProcessTime()/1000000);
         }
-        if(action==16&&acceptProfile(request.profile,profileMask,profile)) {
-            settings.saveError=opennow::settingsFile::save(OPENNOW_SETTINGS_PATH,{true,profile});
-            settings.saved=settings.saveError==0;
-            settings.savedUnavailable=settings.loadCorrupt=settings.loadUnreadable=false;
-        }
-        if(action==17) {
-            settings.saveError=opennow::settingsFile::clear(OPENNOW_SETTINGS_PATH);
-            profile=best;
-            settings.saved=settings.savedUnavailable=settings.loadCorrupt=settings.loadUnreadable=false;
+        if(action==16&&request.hasSettings)store.save(OPENNOW_SETTINGS_PATH,request.settings,opennow::gpu::settingsAvailable);
+        if(action==17)store.reset(OPENNOW_SETTINGS_PATH);
+        {
+            pthread_mutex_lock(&viewMutex);const bool wanted=artworkWanted;pthread_mutex_unlock(&viewMutex);
+            store.artwork(OPENNOW_SETTINGS_PATH,wanted);
         }
         const auto now=sceKernelGetProcessTime();
         // Renew between games: blocking login HTTPS must not stall media processing.
@@ -232,20 +232,27 @@ void* worker(void*) {
             }
             const bool idle=!*cloud.session().id;
             if(action==5&&idle&&request.index>=0) {
-                launchProfile=profile;
-                acceptProfile(request.profile,profileMask,launchProfile);
-                streamFailure[0]=0;
-                pthread_mutex_lock(&viewMutex);
-                publishedCloud.state=CloudState::starting;publishedLaunchProfile=launchProfile;
-                std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Starting cloud session...");
-                pthread_mutex_unlock(&viewMutex);
-                cloud.launchEntry(request.source==1?CatalogSource::library:CatalogSource::browse,static_cast<unsigned>(request.index),
-                                  login.cloudToken(),id,now/1000000,launchProfile);
-                streamAttempted=false;
+                const auto chosen=store.launch(request.hasSettings,request.settings,opennow::gpu::settingsAvailable);
+                streamFailure[0]=0;rejected[0]=0;
+                if(!chosen) {
+                    const auto& list=request.source==1?cloud.library():cloud.view();
+                    rejectedGame=static_cast<unsigned>(request.index)<list.count?list.games[request.index]:opennow::Game{};
+                    std::snprintf(rejected,sizeof(rejected),"%s",opennow::ui::settingsProblem(request.settings,opennow::gpu::settingsAvailable(request.settings)));
+                    pthread_mutex_lock(&viewMutex);publishedLaunch=request.settings;pthread_mutex_unlock(&viewMutex);
+                } else {
+                    launchSettings=*chosen;
+                    pthread_mutex_lock(&viewMutex);
+                    publishedCloud.state=CloudState::starting;publishedLaunch=launchSettings;
+                    std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Starting cloud session...");
+                    pthread_mutex_unlock(&viewMutex);
+                    cloud.launchEntry(request.source==1?CatalogSource::library:CatalogSource::browse,static_cast<unsigned>(request.index),
+                                      login.cloudToken(),id,now/1000000,launchSettings);
+                    streamAttempted=false;
+                }
             }
             if((action==6||action==7)&&idle){streamFailure[0]=0;cloud.loadPage(CatalogSource::browse,request.index>0?static_cast<unsigned>(request.index):0,login.cloudToken(),id,request.direction);}
             if(action==12&&idle)cloud.loadPage(CatalogSource::library,request.index>0?static_cast<unsigned>(request.index):0,login.cloudToken(),id,request.direction);
-            if(action==15&&idle){streamFailure[0]=0;cloud.dismissLaunchError();}
+            if(action==15&&idle){streamFailure[0]=0;rejected[0]=0;cloud.dismissLaunchError();}
             if(action==8&&idle){
                 streamFailure[0]=0;
                 char search[128];
@@ -273,7 +280,8 @@ void* worker(void*) {
             publishedCloud.state=cloud.view().state;publishedCloud.queuePosition=cloud.view().queuePosition;
             publishedCloud.setupStep=cloud.view().setupStep;std::memcpy(publishedCloud.message,cloud.view().message,sizeof(publishedCloud.message));
         }
-        publishedProfile=profile;publishedSettings=settings;
+        publishedDefaults=store.defaults;publishedSettings=store.info;
+        if(*rejected)rejectLaunch(publishedCloud,rejected,rejectedGame);
         publishedSession=*cloud.session().id!=0;
         publishedStreamFailure=*streamFailure!=0;
         if(*streamFailure) {
@@ -311,23 +319,64 @@ void syncBrowser(Section s,const opennow::CloudView& view) noexcept {
 void requestPage(Section s,unsigned page,int target,int direction=1) noexcept {
     Browser& b=browserFor(s);
     b.target=target;b.pending=static_cast<int>(page);
-    submit(s==Section::library?12:7,{static_cast<int>(page),-1,-1,direction});
+    submit(s==Section::library?12:7,{static_cast<int>(page),-1,direction});
 }
-void launchFocused(Section s,int profile) noexcept {
-    lastLaunch={static_cast<int>(browserFor(s).focus),profile,s==Section::library?1:0};
+void launchFocused(Section s,const opennow::StreamSettings& settings) noexcept {
+    lastLaunch={static_cast<int>(browserFor(s).focus),s==Section::library?1:0,1,true,settings};
     hasLastLaunch=true;
     submit(5,lastLaunch);
     detailOpen=false;
 }
-StreamProfile shiftProfile(unsigned mask,StreamProfile current,int delta,bool wrap) noexcept {
-    StreamProfile options[static_cast<unsigned>(StreamProfile::count)];
-    const unsigned count=opennow::ui::availableProfiles(mask,options,static_cast<unsigned>(StreamProfile::count));
-    if(!count)return current;
-    unsigned at=0;
-    for(unsigned i=0;i<count;++i)if(options[i]==current)at=i;
-    if(delta<0)at=at>0?at-1:(wrap?count-1:0);
-    else if(delta>0)at=at+1<count?at+1:(wrap?0:count-1);
-    return options[at];
+void proposeDraft(const opennow::StreamSettings& next) noexcept {
+    if(opennow::ui::needsFixedNetwork(next)&&!opennow::ui::needsFixedNetwork(draft)) {
+        proposal=next;proposal.network=opennow::NetworkPolicy::fixed;confirmFixed=true;
+        return;
+    }
+    draft=next;
+}
+void editStream(unsigned pressed,const opennow::ui::StreamCaps& caps) noexcept {
+    using opennow::ui::StreamRow;
+    const auto row=static_cast<StreamRow>(settingsRow);
+    const int direction=(pressed&PS5_PAD_BUTTON_RIGHT)?1:(pressed&PS5_PAD_BUTTON_LEFT)?-1:0;
+    const int common=(pressed&PS5_PAD_BUTTON_R1)?1:(pressed&PS5_PAD_BUTTON_L1)?-1:0;
+    const auto before=draft;
+    if(direction&&row==StreamRow::preset) {
+        StreamProfile presets[static_cast<unsigned>(StreamProfile::count)];
+        const unsigned count=opennow::ui::qualifiedPresets(presets,static_cast<unsigned>(StreamProfile::count),opennow::gpu::settingsAvailable);
+        int at=-1;
+        for(unsigned i=0;i<count;++i)if(opennow::settingsFor(presets[i])==draft)at=static_cast<int>(i);
+        const int next=at<0?(direction>0?0:static_cast<int>(count)-1):std::clamp(at+direction,0,static_cast<int>(count)-1);
+        if(count)proposeDraft(opennow::settingsFor(presets[next]));
+    }
+    if(direction&&row==StreamRow::decoding)proposeDraft(opennow::ui::withHardware(draft,direction<0,caps));
+    if(direction&&row==StreamRow::codec)proposeDraft(opennow::ui::withHevc(draft,direction>0,caps));
+    if(direction&&row==StreamRow::hdr)draft=opennow::ui::withHdr(draft,direction>0,caps);
+    if(direction&&(row==StreamRow::fps||row==StreamRow::bitrate))draft=opennow::ui::stepValue(draft,row,direction);
+    if((direction&&row==StreamRow::resolution)||(common&&(row==StreamRow::resolution||row==StreamRow::fps||row==StreamRow::bitrate)))
+        draft=opennow::ui::stepCommon(draft,row,direction?direction:common);
+    if(pressed&PS5_PAD_BUTTON_CROSS) {
+        if(row==StreamRow::reset)submit(17,{});
+        else numberEdit=opennow::ui::beginEdit(row,draft);
+    }
+    if(pressed&PS5_PAD_BUTTON_SQUARE){draft=publishedDefaults;adjusted=0;}
+    if((pressed&PS5_PAD_BUTTON_OPTIONS)&&opennow::ui::changedRows(draft,publishedDefaults)&&!opennow::ui::settingsProblem(draft,acceptSettings(draft)))
+        submit(16,{-1,-1,1,true,draft});
+    if(draft==before)return;
+    adjusted=row==StreamRow::decoding&&!draft.hardware()?opennow::ui::rowCount(opennow::ui::changedRows(before,draft)&~opennow::ui::rowBit(StreamRow::decoding)):0;
+}
+void editField(unsigned pressed) noexcept {
+    auto& e=numberEdit;
+    if((pressed&PS5_PAD_BUTTON_LEFT)&&e.cursor>0)--e.cursor;
+    if((pressed&PS5_PAD_BUTTON_RIGHT)&&e.cursor+1<e.length)++e.cursor;
+    if(pressed&PS5_PAD_BUTTON_UP)opennow::ui::changeDigit(e,1);
+    if(pressed&PS5_PAD_BUTTON_DOWN)opennow::ui::changeDigit(e,-1);
+    if(pressed&(PS5_PAD_BUTTON_L1|PS5_PAD_BUTTON_R1))
+        opennow::ui::setEdit(e,opennow::ui::stepCommon(opennow::ui::applyEdit(e,draft),e.row,(pressed&PS5_PAD_BUTTON_R1)?1:-1));
+    if(pressed&PS5_PAD_BUTTON_CROSS) {
+        const auto candidate=opennow::ui::applyEdit(e,draft);
+        if(opennow::validateSettings(candidate)==opennow::SettingsError::none){if(!(candidate==draft))adjusted=0;draft=candidate;e={};}
+    }
+    if(pressed&PS5_PAD_BUTTON_CIRCLE)e={};
 }
 
 bool draw(ps5::demo::Canvas& c) noexcept {
@@ -343,13 +392,16 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     static opennow::View v;
     static opennow::CloudView cv,lv;
     bool streaming=false,inputReady=false,sessionOwned=false,streamFailed=false;
-    StreamProfile profile,launchProfile;unsigned profileMask=0;opennow::ui::SettingsInfo settings;
+    opennow::StreamSettings defaults,launch;opennow::ui::SettingsInfo settings;
     pthread_mutex_lock(&viewMutex);
     v=published;cv=publishedCloud;lv=publishedLibrary;streaming=publishedStream;inputReady=publishedInputReady;sessionOwned=publishedSession;
-    streamFailed=publishedStreamFailure;profile=publishedProfile;launchProfile=publishedLaunchProfile;profileMask=publishedProfileMask;settings=publishedSettings;
+    streamFailed=publishedStreamFailure;defaults=publishedDefaults;launch=publishedLaunch;settings=publishedSettings;
     pthread_mutex_unlock(&viewMutex);
-    if(pendingDefault>=0&&static_cast<int>(profile)==pendingDefault)pendingDefault=-1;
-    const StreamProfile defaultProfile=pendingDefault>=0?static_cast<StreamProfile>(pendingDefault):profile;
+    if(settings.revision!=draftRevision){draft=defaults;draftRevision=settings.revision;adjusted=0;numberEdit={};confirmFixed=false;}
+    const auto caps=streamCaps();
+    opennow::StreamSettings choices[1+static_cast<unsigned>(StreamProfile::count)];
+    const unsigned choiceCount=launchChoices(defaults,choices,1+static_cast<unsigned>(StreamProfile::count));
+    if(detailChoice>=choiceCount)detailChoice=0;
     const bool input=pressed!=0;
     if(artCache)artCache->setPaused(streaming||sessionOwned||cv.state==CloudState::starting||cv.state==CloudState::queued||cv.state==CloudState::ready);
     syncBrowser(Section::library,lv);
@@ -392,7 +444,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     const auto screenNow=[&]{return opennow::ui::screenFor({v,cv,lv,section,streaming,sessionOwned,streamFailed,searchInput.open,detailOpen});};
     Screen screen=screenNow();
     if(screen!=Screen::detail)detailOpen=false;
-    if(screen!=Screen::settings)confirmSignOut=false;
+    if(screen!=Screen::settings){confirmSignOut=confirmClear=confirmFixed=false;numberEdit={};}
     const bool topLevel=screen==Screen::grid||screen==Screen::catalogEmpty||screen==Screen::catalogError||
                         screen==Screen::catalogLoading||screen==Screen::settings;
     if(searchInput.open) {
@@ -414,6 +466,16 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     } else if(confirmSignOut) {
         if(pressed&PS5_PAD_BUTTON_CROSS){confirmSignOut=false;settingsContent=false;if(activeHttp)activeHttp->cancelled.store(true);command.store(11);}
         else if(pressed&PS5_PAD_BUTTON_CIRCLE)confirmSignOut=false;
+        pressed=0;
+    } else if(numberEdit.open()) {
+        editField(pressed);pressed=0;
+    } else if(confirmFixed) {
+        if(pressed&PS5_PAD_BUTTON_CROSS){draft=proposal;adjusted=0;confirmFixed=false;}
+        else if(pressed&PS5_PAD_BUTTON_CIRCLE)confirmFixed=false;
+        pressed=0;
+    } else if(confirmClear) {
+        if(pressed&PS5_PAD_BUTTON_CROSS){if(artCache)artCache->requestDiskClear();confirmClear=false;}
+        else if(pressed&PS5_PAD_BUTTON_CIRCLE)confirmClear=false;
         pressed=0;
     } else if(detailOpen&&(pressed&PS5_PAD_BUTTON_CIRCLE)) {
         detailOpen=false;pressed&=~PS5_PAD_BUTTON_CIRCLE;
@@ -439,9 +501,9 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         } else if(screen==Screen::detail) {
             const auto& view=opennow::ui::catalogFor(detailSection,cv,lv);
             Browser& b=browserFor(detailSection);
-            if(pressed&PS5_PAD_BUTTON_UP)detailProfile=shiftProfile(profileMask,detailProfile,-1,false);
-            if(pressed&PS5_PAD_BUTTON_DOWN)detailProfile=shiftProfile(profileMask,detailProfile,1,false);
-            if(pressed&PS5_PAD_BUTTON_L1)detailProfile=shiftProfile(profileMask,detailProfile,1,true);
+            if((pressed&PS5_PAD_BUTTON_UP)&&detailChoice>0)--detailChoice;
+            if((pressed&PS5_PAD_BUTTON_DOWN)&&detailChoice+1<choiceCount)++detailChoice;
+            if(pressed&PS5_PAD_BUTTON_L1)detailChoice=(detailChoice+1)%choiceCount;
             unsigned siblings[16];
             const unsigned siblingCount=opennow::ui::storeSiblings(view,b.focus,siblings,16);
             for(unsigned i=0;i<siblingCount;++i)if(siblings[i]==b.focus) {
@@ -449,7 +511,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
                 else if((pressed&PS5_PAD_BUTTON_RIGHT)&&i+1<siblingCount)b.focus=siblings[i+1];
                 break;
             }
-            if(pressed&PS5_PAD_BUTTON_CROSS)launchFocused(detailSection,static_cast<int>(detailProfile));
+            if(pressed&PS5_PAD_BUTTON_CROSS)launchFocused(detailSection,choices[detailChoice]);
         } else if(topLevel) {
             if((pressed&(PS5_PAD_BUTTON_L1|PS5_PAD_BUTTON_R1))&&!settingsContent) {
                 const int next=static_cast<int>(section)+((pressed&PS5_PAD_BUTTON_R1)?1:-1);
@@ -468,14 +530,16 @@ bool draw(ps5::demo::Canvas& c) noexcept {
                 } else {
                     if((pressed&PS5_PAD_BUTTON_UP)&&settingsRow>0)--settingsRow;
                     if((pressed&PS5_PAD_BUTTON_DOWN)&&settingsRow+1<rows)++settingsRow;
-                    const bool valueRow=settingsPane==SettingsPane::stream&&settingsRow==0;
-                    if(valueRow&&(pressed&(PS5_PAD_BUTTON_LEFT|PS5_PAD_BUTTON_RIGHT))) {
-                        const auto next=shiftProfile(profileMask,defaultProfile,(pressed&PS5_PAD_BUTTON_RIGHT)?1:-1,false);
-                        if(next!=defaultProfile){pendingDefault=static_cast<int>(next);submit(16,{-1,pendingDefault,-1});}
-                    } else if(pressed&PS5_PAD_BUTTON_LEFT)settingsContent=false;
-                    if(pressed&PS5_PAD_BUTTON_CROSS) {
-                        if(settingsPane==SettingsPane::stream&&settingsRow==1){pendingDefault=-1;submit(17,{});}
-                        if(settingsPane==SettingsPane::account&&settingsRow==0)confirmSignOut=true;
+                    if(settingsPane==SettingsPane::stream)editStream(pressed,caps);
+                    else if(settingsPane==SettingsPane::cache) {
+                        if(settingsRow==0&&(pressed&(PS5_PAD_BUTTON_LEFT|PS5_PAD_BUTTON_RIGHT)))setArtwork(pressed&PS5_PAD_BUTTON_RIGHT);
+                        if(settingsRow==0&&(pressed&PS5_PAD_BUTTON_CROSS))setArtwork(!artworkWanted);
+                        const auto disk=artCache?artCache->diskStats():opennow::art::DiskStats{};
+                        if(settingsRow==1&&(pressed&PS5_PAD_BUTTON_CROSS)&&artCache&&!disk.busy&&(!disk.available||disk.count))confirmClear=true;
+                        if((pressed&PS5_PAD_BUTTON_LEFT)&&settingsRow==1)settingsContent=false;
+                    } else {
+                        if(pressed&PS5_PAD_BUTTON_LEFT)settingsContent=false;
+                        if((pressed&PS5_PAD_BUTTON_CROSS)&&settingsPane==SettingsPane::account&&settingsRow==0)confirmSignOut=true;
                     }
                 }
             } else {
@@ -491,7 +555,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
                         if(b.focus/columns+1<rows)b.focus=std::min(b.focus+columns,view.count-1);
                         else if(view.hasNext)requestPage(section,view.page+1,1);
                     }
-                    if(pressed&PS5_PAD_BUTTON_CROSS){detailOpen=true;detailSection=section;detailProfile=defaultProfile;}
+                    if(pressed&PS5_PAD_BUTTON_CROSS){detailOpen=true;detailSection=section;detailChoice=0;}
                 } else if(pressed&PS5_PAD_BUTTON_CROSS) {
                     if(view.state==CloudState::failed)requestPage(section,b.pending>=0?static_cast<unsigned>(b.pending):view.page,view.count?1:0);
                     else if(screen==Screen::catalogEmpty&&view.hasNext)requestPage(section,view.page+1,1);
@@ -511,17 +575,22 @@ bool draw(ps5::demo::Canvas& c) noexcept {
 #endif
     static opennow::CloudView previousCloud,previousLibrary;
     static opennow::View previous;
-    static StreamProfile previousProfile=StreamProfile::quality;
-    static unsigned previousMask=0,previousArt=~0U;
+    static opennow::StreamSettings previousDefaults,previousLaunch;
+    static unsigned previousArt=~0U;
     static opennow::ui::SettingsInfo previousSettings;
+    static opennow::art::DiskStats previousDisk;
     static bool first=true,previousReady=false,previousKeyboard=false;
     const unsigned artGeneration=artCache?artCache->generation():0;
+    const auto disk=artCache?artCache->diskStats():opennow::art::DiskStats{};
+    const bool diskShown=screen==Screen::settings&&settingsPane==SettingsPane::cache;
+    const bool diskSame=!diskShown||(disk.enabled==previousDisk.enabled&&disk.available==previousDisk.available&&disk.busy==previousDisk.busy&&
+                                     disk.bytes==previousDisk.bytes&&disk.count==previousDisk.count&&disk.error==previousDisk.error);
     if(!first&&!input&&artGeneration==previousArt&&std::memcmp(&previous,&v,sizeof(v))==0&&
        std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&std::memcmp(&previousLibrary,&lv,sizeof(lv))==0&&
-       previousProfile==defaultProfile&&previousMask==profileMask&&std::memcmp(&previousSettings,&settings,sizeof(settings))==0&&
-       previousReady==inputReady&&previousKeyboard==keyboard.open)
+       previousDefaults==defaults&&previousLaunch==launch&&std::memcmp(&previousSettings,&settings,sizeof(settings))==0&&
+       previousReady==inputReady&&previousKeyboard==keyboard.open&&diskSame)
         return false;
-    first=false;previous=v;previousCloud=cv;previousLibrary=lv;previousProfile=defaultProfile;previousMask=profileMask;
+    first=false;previous=v;previousCloud=cv;previousLibrary=lv;previousDefaults=defaults;previousLaunch=launch;previousDisk=disk;
     previousSettings=settings;previousArt=artGeneration;previousReady=inputReady;previousKeyboard=keyboard.open;
 #ifndef OPENNOW_HOST_PREVIEW
     const char* output=opennow::gpu::outputLabel();
@@ -529,9 +598,10 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     const char* output="Host preview \xC2\xB7 no video output";
 #endif
     const Section shownSection=screen==Screen::detail?detailSection:section;
-    opennow::ui::render(c,{screen,shownSection,v,cv,lv,screen==Screen::detail?detailProfile:defaultProfile,launchProfile,profileMask,
+    opennow::ui::render(c,{screen,shownSection,v,cv,lv,defaults,launch,choices,choiceCount,detailChoice,
         browserFor(shownSection).focus,searchInput,shownSearch,output,streaming,settingsPane,settingsContent,settingsRow,confirmSignOut,
-        settings,artCache,++artFrame,keyboard,inputReady});
+        settings,artCache,++artFrame,keyboard,inputReady,draft,caps,acceptSettings(draft),adjusted,numberEdit,
+        numberEdit.open()&&acceptSettings(opennow::ui::applyEdit(numberEdit,draft)),disk,artworkWanted,confirmClear,proposal,confirmFixed});
     return true;
 }
 #ifdef OPENNOW_HOST_PREVIEW
@@ -573,9 +643,9 @@ int main() {
     const char* extra[][2]={{"Dungeons II","XBOX"},{"Dungeons II","STEAM"},{"Cyberpunk 2077","STEAM"},{"Hades II","STEAM"},{"Satisfactory","STEAM"},
         {"No Man\xE2\x80\x99s Sky","STEAM"},{"Hogwarts Legacy","EPIC"},{"Clair Obscur: Expedition 33","XBOX"},{"The Witcher 3: Wild Hunt","GOG"},{"Diablo IV","BATTLE.NET"}};
     published.state=State::authenticated;published.sessionSaved=true;
-    publishedProfileMask=0;
-    for(unsigned i=0;i<static_cast<unsigned>(StreamProfile::count);++i)
-        if(!opennow::settingsFor(static_cast<StreamProfile>(i)).hardware)publishedProfileMask|=1U<<i;
+    publishedDefaults=publishedLaunch=opennow::gpu::bestSettings();
+    publishedSettings.revision=draftRevision=1;
+    draft=publishedDefaults;
     for(unsigned i=0;i<4;++i)game(publishedLibrary,i,covers[i][0],covers[i][1],covers[i][2],covers[i][3],true);
     game(publishedLibrary,4,"Dungeons II","XBOX","https://img.nvidiagrid.net/apps/100000011/ZZ/GAME_BOX_ART_01_preview-missing.jpg","",true);
     game(publishedLibrary,5,"Dungeons II","STEAM","","",true);
@@ -623,11 +693,7 @@ int main() {
     } else if(name=="search") {
         section=Section::browse;searchInput.open=true;std::snprintf(searchInput.text,sizeof(searchInput.text),"DUNGEONS");searchInput.selected=18;
     } else if(name=="detail"||name=="detail-hardware") {
-        detailOpen=true;detailSection=Section::library;detailProfile=StreamProfile::quality;
-        if(name=="detail-hardware") {
-            publishedProfileMask=~0U>>(32-static_cast<unsigned>(StreamProfile::count));
-            detailProfile=StreamProfile::native_hdr120;
-        }
+        detailOpen=true;detailSection=Section::library;detailChoice=name=="detail-hardware"?2:0;
     } else if(name.rfind("settings",0)==0) {
         section=Section::settings;
         publishedSettings.saved=true;
@@ -637,6 +703,16 @@ int main() {
         if(name=="settings-signout")confirmSignOut=true;
         if(name=="settings-about")settingsPane=SettingsPane::about;
         if(name=="settings-save-error"){settingsContent=true;publishedSettings.saved=false;publishedSettings.saveError=28;}
+        using opennow::ui::StreamRow;
+        const auto custom=opennow::StreamSettings{2560,1440,90,75000,opennow::VideoMode::hevcMain10HdrHardware,opennow::QualityMode::original,opennow::NetworkPolicy::fixed};
+        if(name.rfind("settings-stream-",0)==0){settingsContent=true;draft=custom;}
+        if(name=="settings-stream-custom")settingsRow=static_cast<unsigned>(StreamRow::decoding);
+        if(name=="settings-stream-software"){const auto before=draft;draft=opennow::ui::withHardware(draft,false,streamCaps());adjusted=opennow::ui::rowCount(opennow::ui::changedRows(before,draft)&~opennow::ui::rowBit(StreamRow::decoding));settingsRow=static_cast<unsigned>(StreamRow::decoding);}
+        if(name=="settings-stream-editor"){settingsRow=static_cast<unsigned>(StreamRow::resolution);numberEdit=opennow::ui::beginEdit(StreamRow::resolution,draft);std::memcpy(numberEdit.digits+4,"1081",4);}
+        if(name=="settings-stream-unqualified"){draft=opennow::settingsFor(StreamProfile::native_hdr120);settingsRow=static_cast<unsigned>(StreamRow::fps);}
+        if(name=="settings-stream-fixed"){draft=opennow::settingsFor(StreamProfile::experimental);proposal=opennow::ui::withHardware(draft,true,streamCaps());proposal.network=opennow::NetworkPolicy::fixed;confirmFixed=true;settingsRow=static_cast<unsigned>(StreamRow::decoding);}
+        if(name.rfind("settings-cache",0)==0){settingsPane=SettingsPane::cache;settingsContent=true;settingsRow=1;}
+        if(name=="settings-cache-clear")confirmClear=true;
     } else if(name=="starting") {
         publishedCloud.state=CloudState::starting;
         std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Starting cloud session...");
@@ -662,14 +738,19 @@ int main() {
         std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"INTERNAL_ERROR_STATUS (statusCode 4, preview fixture)");
     }
     browsers[0].revision=publishedLibrary.revision;browsers[1].revision=publishedCloud.revision;
-    static opennow::art::Cache cache(previewFetch,nullptr);
+    static opennow::art::Cache cache(previewFetch,nullptr,"build/preview-cache");
     artCache=&cache;
+    if(name=="settings-cache-off"){artworkWanted=false;cache.setDiskEnabled(false);}
     const auto& primed=section==Section::browse?publishedCloud:publishedLibrary;
     for(unsigned i=0;i<primed.count;++i) {
         cache.want(primed.games[i].art,opennow::art::Kind::tile,1);
         cache.want(primed.games[i].hero,opennow::art::Kind::hero,1);
     }
     if(name!="library-art-loading")while(cache.step()){}
+    if(name.rfind("settings-cache",0)==0) {
+        for(unsigned i=0;i<4;++i){cache.want(covers[i][2],opennow::art::Kind::tile,2);cache.want(covers[i][3],opennow::art::Kind::hero,2);}
+        while(cache.step()){}
+    }
     ps5::demo::run(draw,"Host preview - fixture data");
     return 0;
 #else
@@ -677,7 +758,12 @@ int main() {
     opennow::gpu::initialize();
     sceNetInit(); sceUserServiceInitialize(nullptr); scePadInit();
     activeHttp=new opennow::Http;
-    static opennow::art::Cache cache(opennow::art::httpsFetch,nullptr);
+    static opennow::art::Cache cache(opennow::art::httpsFetch,nullptr,storageError?nullptr:OPENNOW_ARTWORK_CACHE_PATH);
+    {
+        opennow::settingsFile::Saved saved;
+        if(opennow::settingsFile::load(OPENNOW_SETTINGS_PATH,saved)==opennow::settingsFile::Status::loaded)artworkWanted=saved.artworkCache;
+        cache.setDiskEnabled(artworkWanted);
+    }
     void* thread=nullptr;
     void* artThread=nullptr;
     void* attributes=nullptr;

@@ -42,9 +42,11 @@ Legacy releases come from a separate development history. They do **not** includ
 ## What works
 
 - NVIDIA device-code sign-in, saved login, and automatic credential renewal.
-- Game and store catalog browsing, search, session allocation, and cancellation.
+- Separate account Library and Browse sections, real cover art, search, session allocation, and cancellation.
 - Native H.264 and HEVC Main10 video decoding, GPU presentation, and Opus stereo audio.
-- DualSense gamepad input and selectable streaming profiles, including 4K targets, SDR, and HDR output paths.
+- DualSense gamepad input, touchpad mouse controls, and an in-game keyboard.
+- Streaming presets and custom resolution, FPS, bitrate, codec, and hardware/software decoding settings.
+- Bounded on-disk artwork caching that survives app restarts.
 - Qualified asynchronous UHD Main10 decoding with owned input buffers and GPU surface leases.
 
 One recorded console test received and presented a 3840 × 2160 Main10 SDR stream at approximately **92 FPS and 51–52 Mb/s** for more than 19 minutes, with no recorded RTP/AU loss, queue overflow, decoder reset, or API error. See [stream quality and measurements](docs/STREAM_QUALITY.md) for the test conditions.
@@ -56,6 +58,7 @@ One recorded console test received and presented a 3840 × 2160 Main10 SDR strea
 - The server can supply a different frame rate, bitrate, or dynamic range from the requested profile. Some earlier 90 FPS requests received 60 FPS.
 - The deeper decode pipeline applies to qualified UHD Main10. H.264 still uses depth one.
 - Audio on this branch is stereo. Broader game, display, firmware, and loader compatibility needs testing.
+- Software decoding supports H.264 SDR only. Hardware H.264 and HEVC Main10 modes are offered only after startup qualification. AV1 is not implemented; the current [PS5_Vulkan video limitations](https://github.com/mihawk-99/PS5_Vulkan/blob/f3cbf875f89978deae9f855b9be2610cec2818ae/docs/CTS_GAPS.md) do not provide an alternative decoder.
 
 ## Install
 
@@ -63,9 +66,9 @@ You need a compatible native-homebrew PS5 environment, a GeForce NOW account wit
 
 1. Download the application ZIP and `SHA256SUMS` from the [release page](https://github.com/OpenCloudGaming/OpenNOW-PS5/releases). If no release is available there yet, use the legacy link above and read its version-specific instructions.
 2. Run `sha256sum <downloaded-file.zip>` on Linux or `shasum -a 256 <downloaded-file.zip>` on macOS. Compare the result with the ZIP's entry in `SHA256SUMS`.
-3. Close OpenNOW before replacing an installation. Keep a backup of the existing title folder.
+3. Close OpenNOW before replacing an installation. Keep a backup outside directories scanned by the loader, so a duplicate title ID cannot become the registered installation.
 4. Extract the archive and install the complete `PPSA99082` folder through a compatible native homebrew directory loader, such as ShadowMountPlus. Follow the loader's registration procedure and make sure another app does not use that title ID.
-5. Open the app and use the NVIDIA authorization page and code shown on screen to sign in. On current development builds, check for `ACCOUNT SAVED` before closing the app.
+5. Open the app and use the NVIDIA authorization page and code shown on screen to sign in. On current development builds, check that the app reports the NVIDIA account is saved before closing it.
 
 Current development builds need no `launch-age.txt` setup. If the home-screen icon or background stays stale after an update, use the loader's supported refresh or re-registration procedure.
 
@@ -75,17 +78,30 @@ These mappings describe the current development build, not every legacy release.
 
 | Control | Menu action |
 | --- | --- |
-| Cross | Sign in or launch the selected game/store |
-| D-pad | Select a game/store |
-| L1 | Cycle stream profiles before launch |
-| Square | Load the catalog |
+| Cross | Sign in, open game details, or activate the selected control |
+| D-pad | Move through games or Settings controls |
+| L1 / R1 | Switch top-level Library, Browse, and Settings sections |
+| Square | Refresh Library/Browse; Revert a stream-settings draft |
 | Triangle | Open catalog search |
-| R1 | Load the next catalog page |
-| Circle | Close the app while keeping the saved login; cancel search text entry |
-| L1 + R1 | Sign out and remove the saved login |
+| Circle | Back or Cancel inside a screen/dialog; close the app at the top level |
+| Options | Save a valid stream-settings draft; submit catalog search |
 | Options + touchpad | Stop streaming, cancel queueing, or retry session cleanup |
 
-In catalog search, use the D-pad to select a character and Cross to type it. Square deletes a character, Triangle clears the text, Options submits, and Circle cancels. R1 advances through search results. Square in the catalog returns to the full catalog.
+Move past the edge of a game page to load the next or previous page. In game details, choose a store and a preset or your saved default, then press Cross to play. That one-off choice does not overwrite the saved default. Sign-out is in **Settings → Account**, with confirmation; L1 + R1 no longer signs out.
+
+In catalog search, use the D-pad to select a character and Cross to type it. Square deletes a character, Triangle clears the text, Options submits, and Circle cancels.
+
+During streaming, the touchpad moves the mouse. A physical click with one finger is left-click; with two fingers it is right-click. **Options + Triangle** opens or closes the in-game keyboard, and **Options + Square** sends gamepad Back/View. In the keyboard, Cross presses a key, Square is Backspace, Triangle is Space, L1 toggles Shift, and Circle returns to the game. The keyboard temporarily replaces the picture while decoding and audio continue; typed text is not echoed or logged. Options can reach the game before the second button of a shortcut is pressed.
+
+### Custom stream settings and artwork cache
+
+Development build `00.002.043` adds editable stream settings. In **Settings → Stream**, left/right changes a value; Cross opens a digit editor for resolution, FPS, or bitrate. L1/R1 choose common values inside those editors. Options saves, Square reverts, and unsaved changes remain when leaving the pane. Saved settings apply to the next session, not an already-running game.
+
+The application allows even dimensions from 320×180 up to 3840×2160 and integer frame rates from 30–120 with qualified hardware decoding. Software H.264 is limited to 1920×1080 and 30–60 FPS. The bitrate limit is 4–100 Mb/s. Hardware availability and the current output can narrow those ranges; invalid or unqualified combinations cannot be saved. These are request limits, not guarantees of server acceptance or sustained performance. Video keeps its aspect ratio instead of stretching non-16:9 resolutions.
+
+Hardware H.264 requires fixed-resolution streaming. When switching from an adaptive configuration, the app asks before changing that policy. HEVC Main10 SDR and HDR have separate runtime qualification paths. Existing preset-only settings files are migrated without changing the saved NVIDIA login.
+
+**Settings → Cover art & cache** controls persistent artwork storage under `/download0/opennow/artwork`. The cache has a 64 MiB budget and at most 128 images, with oldest-access eviction. Larger images can remain memory-only. Turning saving off retains existing disk content; Clear removes only cache files, even while saving is off. It does not remove your login, stream settings, or NVIDIA Library entries.
 
 ## Privacy and saved login
 
@@ -93,7 +109,7 @@ Starting with development build `00.002.039`, the app saves NVIDIA credentials a
 
 The account file has owner-only permissions but is **not encrypted**. Keep it private. Ordinary app closure and replacement of application files retain the saved login. Removing the title or clearing its download data can erase it. Full console-reboot persistence still needs live validation.
 
-The app restores and renews the login automatically. Temporary network failures retain the credentials and retry. NVIDIA can require sign-in again if credentials expire or are revoked. The UI reports `ACCOUNT SAVED` or `ACCOUNT NOT SAVED`. L1 + R1 signs out and removes the saved login; closing the app or stopping a game does not.
+The app restores and renews the login automatically. Temporary network failures retain the credentials and retry. NVIDIA can require sign-in again if credentials expire or are revoked. The UI shows whether the account is saved. **Settings → Account → Sign out** removes the saved login after confirmation; closing the app or stopping a game does not.
 
 Private diagnostics also live under `/download0/opennow`; an explicit local marker enables a short troubleshooting video capture. **Do not upload this directory, account files, or unredacted session logs in an issue.** Public source and release packages exclude credentials, personal configuration, console dumps, and captured gameplay.
 
@@ -106,7 +122,7 @@ git clone https://github.com/OpenCloudGaming/OpenNOW-PS5.git
 cd OpenNOW-PS5
 ```
 
-Host tests use synthetic fixtures and need no console or NVIDIA account. Install Clang with AddressSanitizer and UndefinedBehaviorSanitizer support, Python 3, and libcurl development headers, then run:
+Host tests use synthetic fixtures and need no console or NVIDIA account. Install Clang with AddressSanitizer and UndefinedBehaviorSanitizer support, Python 3, and libcurl, EGL, and OpenGL development headers. On Ubuntu, the graphics-header packages are `libegl-dev` and `libgl-dev`. Then run:
 
 ```sh
 CC=clang CXX=clang++ bash tools/test-port.sh
@@ -123,10 +139,10 @@ The build retrieves and verifies pinned public dependencies and writes `dist/PPS
 For a synthetic catalog preview on Linux or macOS:
 
 ```sh
-OPENNOW_PREVIEW_CATALOG=1 bash tools/preview-port.sh
+bash tools/preview-port.sh
 ```
 
-The image is written to `build/preview.png`. Linux needs libcurl development headers and Python Pillow; macOS uses `sips`. The preview uses fixture data, not an authenticated session or video stream.
+Screen images are written to `build/preview/`, with the Library also at `build/preview.png`. Linux needs Python Pillow; macOS uses `sips`. The preview downloads public artwork and uses fixture account/settings data, not an authenticated session or video stream.
 
 See [contributing](CONTRIBUTING.md) for the development workflow, [native hardware video](docs/NATIVE_HARDWARE_VIDEO.md) for the GPU path, and [development build notes](docs/DEVELOPMENT_BUILDS.md) for launch recovery, signaling fixes, and the alternative SSH build workflow.
 

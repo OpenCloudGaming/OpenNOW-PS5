@@ -26,7 +26,7 @@ public:
  // Only startup qualification may select a deeper mode. Live open retries
  // depth one if a previously qualified deeper configuration is refused.
  bool openForQualification(const NativeMode&,unsigned depth) noexcept;
- static bool setQualifiedMain10Depth(unsigned depth) noexcept;
+ static bool setQualifiedMain10Depth(const NativeMode&,unsigned depth) noexcept;
  // Startup-only capability probe on a closed instance. Opens and closes
  // deeper configurations without submitting any compressed input.
  bool probePipelineCreation(const NativeMode&) noexcept;

@@ -26,7 +26,12 @@ int sceKernelMunmap(void*,std::size_t);
 namespace opennow::video {
 namespace {
 constexpr int invalid=-1,busy=-2;
-std::atomic_uint qualifiedMain10Depth{1};
+std::atomic_uint qualifiedMain10Depth[2]{{1},{1}};
+std::atomic_uint* qualifiedDepthFor(const NativeMode& mode) noexcept {
+ if((mode.codec!=NativeCodec::hevc_main10&&mode.codec!=NativeCodec::hevc_main10_sdr)||
+    mode.visible_width!=3840||mode.visible_height!=2160||mode.level!=156)return nullptr;
+ return &qualifiedMain10Depth[mode.codec==NativeCodec::hevc_main10_sdr?1:0];
+}
 std::uint64_t availableCpus() noexcept {
 #ifdef OPENNOW_PS5
  cpuset_t set{};std::uint64_t mask=0;
@@ -98,20 +103,23 @@ void* HardwareDecoder::address(unsigned slot) const noexcept {
  return static_cast<std::uint8_t*>(pictures_.address)+slot*frameBytes_;
 }
 bool HardwareDecoder::open(const NativeMode& mode) noexcept {
- const auto depth=mode.codec==NativeCodec::hevc_main10&&mode.visible_width==3840?qualifiedMain10Depth.load():1u;
+ auto* qualified=qualifiedDepthFor(mode);
+ const auto depth=qualified?qualified->load():1u;
  if(openWithDepth(mode,depth))return true;
+ if(qualified)*qualified=1;
  if(depth==1||decoder_||queue_)return false;
 #ifdef OPENNOW_PS5
  char note[140];std::snprintf(note,sizeof(note),"NATIVE pipeline open refused depth=%u rc=%x; retrying depth=1",depth,error_);opennow_media_note(note);
 #endif
  return openWithDepth(mode,1);
 }
-bool HardwareDecoder::setQualifiedMain10Depth(unsigned depth) noexcept {
- if(depth<1||depth>3)return false;
- qualifiedMain10Depth=depth;return true;
+bool HardwareDecoder::setQualifiedMain10Depth(const NativeMode& mode,unsigned depth) noexcept {
+ auto* qualified=qualifiedDepthFor(mode);
+ if(!qualified||depth<1||depth>3)return false;
+ *qualified=depth;return true;
 }
 bool HardwareDecoder::openForQualification(const NativeMode& mode,unsigned depth) noexcept {
- if(depth<1||depth>3||(depth>1&&(mode.codec!=NativeCodec::hevc_main10||mode.visible_width!=3840)))return fail(invalid);
+ if(depth<1||depth>3||(depth>1&&!qualifiedDepthFor(mode)))return fail(invalid);
  return openWithDepth(mode,depth);
 }
 bool HardwareDecoder::openWithDepth(const NativeMode& mode,unsigned depth) noexcept {
@@ -126,7 +134,7 @@ bool HardwareDecoder::openWithDepth(const NativeMode& mode,unsigned depth) noexc
 bool HardwareDecoder::probePipelineCreation(const NativeMode& mode) noexcept {
  // Never replace a live decoder or a surface still sampled by the GPU.
  if(decoder_||queue_||leased())return fail(busy);
- if(mode.codec!=NativeCodec::hevc_main10||mode.visible_width!=3840)return fail(invalid);
+ if(!qualifiedDepthFor(mode))return fail(invalid);
  const auto workers=decoderWorkers(availableCpus());
  for(unsigned depth:{2u,3u}){
   const bool opened=openConfigured(mode,workers,depth);
@@ -303,8 +311,8 @@ HardwareDecoder::Result HardwareDecoder::drain(Picture& picture) noexcept {
 bool HardwareDecoder::fallbackToClassic() noexcept {
  const auto mode=mode_,output=outputMode_;
  const int cause=error_;
+ if(auto* qualified=qualifiedDepthFor(mode))*qualified=1;
  if(!openWithDepth(mode,1))return false;
- qualifiedMain10Depth=1;
 #ifdef OPENNOW_PS5
  char note[160];std::snprintf(note,sizeof(note),"NATIVE pipeline fallback rc=%x; active depth=1",cause);opennow_media_note(note);
 #else

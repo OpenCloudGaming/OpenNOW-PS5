@@ -22,9 +22,16 @@ bool httpsFetch(void* context,const char* url,unsigned char* buffer,std::size_t 
 bool requestUrl(const char* artwork,Kind kind,char* out,std::size_t capacity) noexcept;
 bool decode(const unsigned char* data,std::size_t size,unsigned width,unsigned height,std::uint32_t* out) noexcept;
 
+struct DiskStats {
+    bool enabled=false,available=false,busy=false;
+    std::size_t bytes=0,count=0;
+    bool error=false;
+};
+class DiskCache;
+
 class Cache {
 public:
-    Cache(Fetch fetch,void* context) noexcept;
+    Cache(Fetch fetch,void* context,const char* diskRoot=nullptr) noexcept;
     ~Cache();
     Cache(const Cache&)=delete;
     Cache& operator=(const Cache&)=delete;
@@ -34,6 +41,9 @@ public:
     bool drawHero(ps5::demo::Canvas& canvas,const char* artwork,int x,int y,unsigned width,unsigned height,
                   const std::uint8_t* columnAlpha,const std::uint8_t* rowAlpha) noexcept;
     unsigned generation() const noexcept {return generation_.load();}
+    void setDiskEnabled(bool enabled) noexcept;
+    void requestDiskClear() noexcept;
+    DiskStats diskStats() const noexcept;
     bool step() noexcept;
     void requestStop() noexcept {stop_.store(true);cancel_.store(true);}
     void setPaused(bool paused) noexcept {paused_.store(paused);if(paused)cancel_.store(true);}
@@ -50,9 +60,14 @@ private:
         std::uint32_t* pixels=nullptr;
     };
     Slot* find(const char* artwork,Kind kind) noexcept;
+    void publishDiskStats() noexcept;
     Fetch fetch_;
     void* context_;
-    pthread_mutex_t mutex_=PTHREAD_MUTEX_INITIALIZER;
+    mutable pthread_mutex_t mutex_=PTHREAD_MUTEX_INITIALIZER;
+    DiskCache* disk_=nullptr;
+    DiskStats diskStats_{};
+    bool diskInitialize_=false;
+    std::uint64_t clearRequested_=0,cleared_=0;
     Slot slots_[tileSlots+heroSlots]{};
     std::uint32_t* scratch_=nullptr;
     unsigned char* compressed_=nullptr;

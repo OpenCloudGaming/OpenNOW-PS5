@@ -115,6 +115,7 @@ void Cloud::fail(const char* text) noexcept {view_.state=CloudState::failed;std:
 void Cloud::failLaunch(const char* text) noexcept {fail(text);view_.launchError=true;}
 void Cloud::reset() noexcept {
     secureErase(&session_,sizeof(session_));
+    session_={};
     const unsigned revision=view_.revision,libraryRevision=library_.revision;
     view_={};library_={};view_.revision=revision;library_.revision=libraryRevision;
     base_[0]=vpc_[0]=search_[0]=0;
@@ -201,27 +202,28 @@ bool Cloud::fetchPage(CatalogSource source,unsigned page,const char* jwt,const c
 }
 void Cloud::select(int delta) noexcept {if(view_.state!=CloudState::catalog||!view_.count)return;view_.selected=(view_.selected+view_.count+delta)%view_.count;}
 void Cloud::focus(unsigned index) noexcept {if(view_.state==CloudState::catalog&&index<view_.count)view_.selected=index;}
-void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,StreamProfile profile) noexcept {
+void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept {
     if(view_.state!=CloudState::catalog||view_.selected>=view_.count||*session_.id)return;
-    start(view_.games[view_.selected],jwt,device,now,profile);
+    start(view_.games[view_.selected],jwt,device,now,settings);
 }
-void Cloud::launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,StreamProfile profile) noexcept {
+void Cloud::launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept {
     const CloudView& entries=source==CatalogSource::library?library_:view_;
     if(entries.state!=CloudState::catalog||index>=entries.count)return;
     if(source==CatalogSource::browse)view_.selected=index;
     const Game game=entries.games[index];
-    start(game,jwt,device,now,profile);
+    start(game,jwt,device,now,settings);
 }
 void Cloud::dismissLaunchError() noexcept {
     if(*session_.id||!view_.launchError)return;
     view_.launchError=false;view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");
 }
-void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint64_t now,StreamProfile profile) noexcept {
+void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& requested) noexcept {
     if(*session_.id||view_.state==CloudState::starting||view_.state==CloudState::queued||view_.state==CloudState::ready)return;
     view_.current=game;view_.launchError=false;
     for(const char* digit=game.id;*digit;++digit)if(*digit<'0'||*digit>'9'){failLaunch("Catalog variant has no numeric launch ID");return;}
-    const auto settings=settingsFor(profile);
-    session_.profile=profile;
+    const StreamSettings settings=requested;
+    if(validateSettings(settings)!=SettingsError::none){failLaunch("Invalid stream settings");return;}
+    session_.settings=settings;
     char netId[128]{},netUrl[768],netBody[256];
     std::snprintf(netUrl,sizeof(netUrl),"%sv2/nettestsession",base_);
     std::snprintf(netBody,sizeof(netBody),
@@ -242,17 +244,17 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
     cJSON_AddArrayToObject(req,"availableSupportedControllers");
     for(auto* key:{"useOps","accountLinked"})cJSON_AddBoolToObject(req,key,true);
     for(auto* key:{"secureRTSPSupported","enablePersistingInGameSettings"})cJSON_AddBoolToObject(req,key,false);
-    cJSON_AddNumberToObject(req,"streamerVersion",1);cJSON_AddNumberToObject(req,"audioMode",2);cJSON_AddNumberToObject(req,"sdrHdrMode",settings.hdr?1:0);cJSON_AddNumberToObject(req,"surroundAudioInfo",0);cJSON_AddNumberToObject(req,"remoteControllersBitmap",1);cJSON_AddNumberToObject(req,"enhancedStreamMode",1);cJSON_AddNumberToObject(req,"appLaunchMode",2);cJSON_AddNumberToObject(req,"clientTimezoneOffset",0);
+    cJSON_AddNumberToObject(req,"streamerVersion",1);cJSON_AddNumberToObject(req,"audioMode",2);cJSON_AddNumberToObject(req,"sdrHdrMode",settings.hdr()?1:0);cJSON_AddNumberToObject(req,"surroundAudioInfo",0);cJSON_AddNumberToObject(req,"remoteControllersBitmap",1);cJSON_AddNumberToObject(req,"enhancedStreamMode",1);cJSON_AddNumberToObject(req,"appLaunchMode",2);cJSON_AddNumberToObject(req,"clientTimezoneOffset",0);
     auto* features=cJSON_AddObjectToObject(req,"requestedStreamingFeatures");
     for(auto* key:{"reflex","cloudGsync","enabledL4S","trueHdr","fallbackToLogicalResolution","vsync"})cJSON_AddBoolToObject(features,key,false);
     for(auto* key:{"mouseMovementFlags","supportedHidDevices","profile","chromaFormat","prefilterMode","prefilterSharpness","prefilterNoiseReduction","hudStreamingMode","hdrColorSpace"})cJSON_AddNumberToObject(features,key,0);
-    cJSON_AddNumberToObject(features,"bitDepth",settings.hdr?1:0);cJSON_AddNullToObject(features,"hidDevices");cJSON_AddNumberToObject(features,"sdrColorSpace",2);cJSON_AddNumberToObject(features,"maxBitrateKbps",settings.bitrate_kbps);cJSON_AddNumberToObject(features,"codec",settings.codec==VideoCodec::hevc?2:1);if(!settings.hardware)cJSON_AddNumberToObject(features,"dynamicStreamingMode",3);cJSON_AddNumberToObject(features,"audioChannelCount",2);
+    cJSON_AddNumberToObject(features,"bitDepth",settings.tenBit()?1:0);cJSON_AddNullToObject(features,"hidDevices");cJSON_AddNumberToObject(features,"sdrColorSpace",2);cJSON_AddNumberToObject(features,"maxBitrateKbps",settings.bitrate_kbps);cJSON_AddNumberToObject(features,"codec",settings.codec()==VideoCodec::hevc?2:1);if(settings.network==NetworkPolicy::adaptive)cJSON_AddNumberToObject(features,"dynamicStreamingMode",3);cJSON_AddNumberToObject(features,"audioChannelCount",2);
     auto* meta=cJSON_AddArrayToObject(req,"metaData");
     const char* keys[]={"SubSessionId","wssignaling","GSStreamerType"};const char* values[]={device,"1","WebRTC"};
     for(int i=0;i<3;++i){auto* m=cJSON_CreateObject();cJSON_AddStringToObject(m,"key",keys[i]);cJSON_AddStringToObject(m,"value",values[i]);cJSON_AddItemToArray(meta,m);}
     auto* monitors=cJSON_AddArrayToObject(req,"clientRequestMonitorSettings");auto* monitor=cJSON_CreateObject();cJSON_AddItemToArray(monitors,monitor);
     for(auto* key:{"monitorId","positionX","positionY"})cJSON_AddNumberToObject(monitor,key,0);
-    cJSON_AddNumberToObject(monitor,"widthInPixels",settings.width);cJSON_AddNumberToObject(monitor,"heightInPixels",settings.height);cJSON_AddNumberToObject(monitor,"framesPerSecond",settings.fps);cJSON_AddNumberToObject(monitor,"dpi",100);cJSON_AddNumberToObject(monitor,"sdrHdrMode",settings.hdr?1:0);if(settings.hdr){auto* display=cJSON_AddObjectToObject(monitor,"displayData");
+    cJSON_AddNumberToObject(monitor,"widthInPixels",settings.width);cJSON_AddNumberToObject(monitor,"heightInPixels",settings.height);cJSON_AddNumberToObject(monitor,"framesPerSecond",settings.fps);cJSON_AddNumberToObject(monitor,"dpi",100);cJSON_AddNumberToObject(monitor,"sdrHdrMode",settings.hdr()?1:0);if(settings.hdr()){auto* display=cJSON_AddObjectToObject(monitor,"displayData");
      // Preferred content luminance defaults used by the native desktop client;
      // these are negotiation hints, not measured LG panel capabilities.
      cJSON_AddNumberToObject(display,"desiredContentMaxLuminance",1000);cJSON_AddNumberToObject(display,"desiredContentMinLuminance",0);cJSON_AddNumberToObject(display,"desiredContentMaxFrameAverageLuminance",400);
@@ -326,6 +328,6 @@ void Cloud::tick(const char* jwt,const char* device,std::uint64_t now) noexcept 
 }
 bool Cloud::stop(const char* jwt,const char* device) noexcept {
     if(*session_.id){char url[768];std::snprintf(url,sizeof(url),"%sv2/session/%s",base_,session_.id);auto r=request_(context_,"DELETE",url,nullptr,jwt,device);if(r.error||((r.status!=404&&r.status!=410)&&(r.status<200||r.status>=300))){fail("Unable to stop cloud session");return false;}}
-    secureErase(&session_,sizeof(session_));view_.queuePosition=view_.setupStep=-1;view_.launchError=false;view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");return true;
+    secureErase(&session_,sizeof(session_));session_={};view_.queuePosition=view_.setupStep=-1;view_.launchError=false;view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");return true;
 }
 }

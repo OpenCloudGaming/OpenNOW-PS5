@@ -3,7 +3,10 @@
 #include "../src/main.cpp"
 #undef main
 #include "../src/ui/font.hpp"
+#include "../src/ui/artwork_disk.hpp"
 #include <cassert>
+#include <filesystem>
+#include <vector>
 
 namespace { unsigned testButtons=0; bool testConnected=true; PS5_PadTouchData testTouch{}; }
 extern "C" {
@@ -13,6 +16,13 @@ int scePadReadState(int,PS5_PadData* data) {data->connected=testConnected;data->
 }
 opennow::Http::Http() noexcept=default;
 opennow::Http::~Http()=default;
+namespace { bool testHardware=false; }
+namespace opennow::gpu {
+bool settingsAvailable(const StreamSettings& settings) noexcept {
+    return validateSettings(settings)==SettingsError::none&&(!settings.hardware()||(testHardware&&!(settings.hdr()&&settings.fps>90)));
+}
+StreamSettings bestSettings() noexcept {return testHardware?settingsFor(StreamProfile::native_hdr90):settingsFor(StreamProfile::quality);}
+}
 
 namespace {
 void game(opennow::CloudView& view,unsigned i,const char* title,const char* store,bool owned) {
@@ -47,14 +57,69 @@ void textChecks(ps5::demo::Canvas& canvas) {
     assert(opennow::ui::textWidth(Face::mono,22,bad)>0);
 }
 
+void writeV1(const char* path,StreamProfile profile) {
+    unsigned char record[16]{'O','N','S','T'};
+    opennow::settingsFile::write32(record+4,1);
+    opennow::settingsFile::write32(record+8,static_cast<std::uint32_t>(profile));
+    opennow::settingsFile::write32(record+12,opennow::settingsFile::checksum(record,12));
+    FILE* file=std::fopen(path,"wb");
+    assert(file&&std::fwrite(record,1,sizeof(record),file)==sizeof(record));
+    std::fclose(file);
+}
+void storeChecks() {
+    using opennow::StreamSettings;
+    const char* path="build/host-tests/ui-store-settings.bin";
+    std::remove(path);
+    const auto available=opennow::gpu::settingsAvailable;
+    const auto quality=opennow::settingsFor(StreamProfile::quality),smooth=opennow::settingsFor(StreamProfile::smooth);
+    opennow::ui::StreamStore store;
+    opennow::settingsFile::Saved file;
+    store.load(path,quality,false,available);
+    assert(!store.info.saved&&store.defaults==quality&&!store.artworkSaved&&store.info.revision==1);
+    store.artwork(path,true);
+    assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded);
+    assert(!file.hasSettings&&file.artworkCache&&file.settings==quality&&store.info.revision==1);
+    const StreamSettings custom{1600,900,45,33000};
+    store.save(path,custom,available);
+    assert(store.defaults==custom&&store.info.revision==2&&store.info.saved);
+    assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&file.hasSettings&&file.settings==custom&&file.artworkCache);
+    StreamSettings invalid=custom;invalid.width=1601;
+    store.save(path,invalid,available);
+    StreamSettings hardware=custom;hardware.mode=opennow::VideoMode::h264Hardware;hardware.network=opennow::NetworkPolicy::fixed;
+    store.save(path,hardware,available);
+    assert(store.defaults==custom&&store.info.revision==2);
+    store.artwork(path,false);
+    assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&file.settings==custom&&file.hasSettings&&!file.artworkCache);
+    assert(store.info.revision==2&&!store.info.cacheSaveError);
+    assert(*store.launch(true,smooth,available)==smooth&&*store.launch(false,smooth,available)==custom);
+    assert(!store.launch(true,invalid,available)&&!store.launch(true,hardware,available)&&store.defaults==custom);
+    const char* broken="build/host-tests/missing-ui-store-directory/settings.bin";
+    store.reset(broken);
+    assert(store.info.saveError&&store.defaults==custom&&store.info.revision==2&&store.info.saved);
+    assert(store.saved.hasSettings&&store.saved.settings==custom);
+    store.save(broken,smooth,available);
+    assert(store.info.saveError&&store.defaults==custom&&store.info.revision==2);
+    store.reset(path);
+    assert(!store.info.saveError);
+    assert(store.defaults==quality&&store.info.revision==3&&!store.info.saved);
+    assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&!file.hasSettings&&!file.artworkCache);
+    writeV1(path,StreamProfile::smooth);
+    store.load(path,quality,true,available);
+    assert(store.info.saved&&!store.info.savedUnavailable&&store.defaults==smooth&&store.artworkSaved);
+    writeV1(path,StreamProfile::native_hdr120);
+    store.load(path,quality,true,available);
+    assert(store.info.saved&&store.info.savedUnavailable&&store.defaults==quality);
+    store.save(path,smooth,available);
+    assert(!store.info.savedUnavailable&&store.defaults==smooth);
+    std::remove(path);
+}
+
 bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     textChecks(canvas);
     opennow::Http http;
     activeHttp=&http;
     published.state=State::authenticated;published.sessionSaved=true;
-    publishedProfile=StreamProfile::quality;
-    for(unsigned i=0;i<static_cast<unsigned>(StreamProfile::count);++i)
-        if(!opennow::settingsFor(static_cast<StreamProfile>(i)).hardware)publishedProfileMask|=1U<<i;
+    publishedDefaults=opennow::gpu::bestSettings();publishedSettings.revision=1;
     const auto press=[&](unsigned buttons){testButtons=0;draw(canvas);testButtons=buttons;draw(canvas);};
 
     publishedLibrary.state=CloudState::loading;publishedCloud.state=CloudState::catalog;
@@ -186,35 +251,41 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     press(PS5_PAD_BUTTON_LEFT);assert(browsers[0].focus==2);
     press(PS5_PAD_BUTTON_RIGHT);assert(browsers[0].focus==7);
     press(PS5_PAD_BUTTON_RIGHT);assert(browsers[0].focus==7);
-    press(PS5_PAD_BUTTON_UP);assert(detailProfile==StreamProfile::quality);
-    press(PS5_PAD_BUTTON_DOWN);assert(detailProfile==StreamProfile::smooth&&command.load()==0);
-    press(PS5_PAD_BUTTON_L1);assert(detailProfile==StreamProfile::experimental&&command.load()==0);
+    press(PS5_PAD_BUTTON_UP);assert(detailChoice==0);
+    press(PS5_PAD_BUTTON_DOWN);assert(detailChoice==1&&command.load()==0);
+    press(PS5_PAD_BUTTON_L1);assert(detailChoice==2&&command.load()==0);
     {
         Request launched;
         press(PS5_PAD_BUTTON_CROSS);
-        assert(take(launched)==5&&launched.index==7&&launched.source==1&&launched.profile==static_cast<int>(StreamProfile::experimental));
-        assert(!detailOpen&&publishedProfile==StreamProfile::quality);
+        assert(take(launched)==5&&launched.index==7&&launched.source==1&&launched.hasSettings);
+        assert(launched.settings==opennow::settingsFor(StreamProfile::smooth));
+        assert(!detailOpen&&publishedDefaults==opennow::settingsFor(StreamProfile::quality)&&draft==publishedDefaults);
         press(PS5_PAD_BUTTON_CROSS);
+        assert(detailChoice==0);
         press(PS5_PAD_BUTTON_DOWN);
-        assert(launched.index==7&&launched.profile==static_cast<int>(StreamProfile::experimental));
-        assert(command.load()==0&&detailProfile==StreamProfile::smooth);
-        submit(5,{1,static_cast<int>(StreamProfile::smooth),0});
-        submit(16,{-1,static_cast<int>(StreamProfile::quality),-1});
+        assert(launched.settings==opennow::settingsFor(StreamProfile::smooth)&&lastLaunch.settings==launched.settings);
+        assert(command.load()==0&&detailChoice==1);
+        submit(5,{1,0,1,true,opennow::settingsFor(StreamProfile::smooth)});
+        submit(16,{-1,-1,1,true,opennow::settingsFor(StreamProfile::compatibility)});
         Request next;
-        assert(take(next)==16&&next.index==-1&&next.profile==static_cast<int>(StreamProfile::quality));
-        assert(take(next)==0&&next.index==-1&&next.profile==-1&&next.source==-1);
-        submit(5,{4,static_cast<int>(StreamProfile::smooth),1});
+        assert(take(next)==16&&next.index==-1&&next.hasSettings&&next.settings==opennow::settingsFor(StreamProfile::compatibility));
+        assert(take(next)==0&&next.index==-1&&!next.hasSettings&&next.source==-1);
+        submit(5,{4,1,1,true,opennow::settingsFor(StreamProfile::smooth)});
         command.store(10);
         assert(take(next)==10);
         press(PS5_PAD_BUTTON_CIRCLE);
         assert(!detailOpen&&command.load()==0);
     }
+    storeChecks();
     {
-        StreamProfile workerProfile=StreamProfile::quality;
-        assert(acceptProfile(static_cast<int>(StreamProfile::experimental),publishedProfileMask,workerProfile)&&workerProfile==StreamProfile::experimental);
-        assert(!acceptProfile(-1,publishedProfileMask,workerProfile));
-        assert(!acceptProfile(static_cast<int>(StreamProfile::native_hdr120),publishedProfileMask,workerProfile)&&workerProfile==StreamProfile::experimental);
-        assert(!acceptProfile(99,publishedProfileMask,workerProfile));
+        const auto before=publishedCloud;
+        opennow::StreamSettings unqualified=opennow::settingsFor(StreamProfile::native_4k120);
+        rejectLaunch(publishedCloud,opennow::ui::settingsProblem(unqualified,opennow::gpu::settingsAvailable(unqualified)),publishedLibrary.games[7]);
+        assert(current()==Screen::launchFailed&&publishedCloud.launchError&&publishedCloud.state==CloudState::catalog);
+        assert(!std::strcmp(publishedCloud.current.title,publishedLibrary.games[7].title)&&std::strstr(publishedCloud.message,"Not qualified"));
+        testButtons=0;draw(canvas);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(take()==15);
+        publishedCloud=before;
     }
 
     press(PS5_PAD_BUTTON_TRIANGLE);
@@ -236,22 +307,173 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     press(PS5_PAD_BUTTON_UP);press(PS5_PAD_BUTTON_UP);assert(settingsPane==SettingsPane::stream);
     press(PS5_PAD_BUTTON_RIGHT);assert(settingsContent&&settingsRow==0);
     {
+        using opennow::ui::StreamRow;
+        using opennow::StreamSettings;
+        const auto row=[&](StreamRow target){while(settingsRow>static_cast<unsigned>(target))press(PS5_PAD_BUTTON_UP);while(settingsRow<static_cast<unsigned>(target))press(PS5_PAD_BUTTON_DOWN);};
+        const auto ack=[&](const StreamSettings& saved){publishedDefaults=saved;++publishedSettings.revision;testButtons=0;draw(canvas);};
         Request request;
+        const auto quality=opennow::settingsFor(StreamProfile::quality),smooth=opennow::settingsFor(StreamProfile::smooth);
+        assert(draft==quality);
         press(PS5_PAD_BUTTON_RIGHT);
-        assert(take(request)==16&&request.profile==static_cast<int>(StreamProfile::smooth)&&pendingDefault==request.profile);
-        press(PS5_PAD_BUTTON_RIGHT);
-        assert(take(request)==16&&request.profile==static_cast<int>(StreamProfile::experimental));
-        publishedProfile=StreamProfile::experimental;testButtons=0;draw(canvas);
-        assert(pendingDefault==-1);
+        assert(draft==smooth&&command.load()==0&&publishedDefaults==quality);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent);
+        press(PS5_PAD_BUTTON_L1);assert(section==Section::browse);
+        press(PS5_PAD_BUTTON_R1);assert(section==Section::settings&&draft==smooth);
+        press(PS5_PAD_BUTTON_RIGHT);assert(settingsContent&&settingsRow==0);
+        press(PS5_PAD_BUTTON_OPTIONS);
+        assert(take(request)==16&&request.hasSettings&&request.settings==smooth);
+        ack(smooth);
+        assert(draft==smooth&&!opennow::ui::changedRows(draft,publishedDefaults));
+        press(PS5_PAD_BUTTON_OPTIONS);assert(command.load()==0);
+
+        row(StreamRow::fps);
+        press(PS5_PAD_BUTTON_RIGHT);assert(draft.fps==60);
+        press(PS5_PAD_BUTTON_LEFT);assert(draft.fps==59);
+        press(PS5_PAD_BUTTON_L1);assert(draft.fps==30);
+        press(PS5_PAD_BUTTON_R1);press(PS5_PAD_BUTTON_R1);assert(draft.fps==60);
         press(PS5_PAD_BUTTON_LEFT);
-        assert(take(request)==16&&request.profile==static_cast<int>(StreamProfile::smooth));
-        publishedProfile=StreamProfile::smooth;
+        press(PS5_PAD_BUTTON_OPTIONS);
+        assert(take(request)==16&&request.settings.fps==59);
+        publishedSettings.saveError=5;testButtons=0;draw(canvas);
+        assert(draft.fps==59&&publishedDefaults==smooth);
+        publishedSettings.saveError=0;
+        press(PS5_PAD_BUTTON_SQUARE);assert(draft==smooth);
+
+        row(StreamRow::bitrate);
+        press(PS5_PAD_BUTTON_RIGHT);assert(draft.bitrate_kbps==21000);
+        press(PS5_PAD_BUTTON_R1);assert(draft.bitrate_kbps==25000);
+        press(PS5_PAD_BUTTON_CROSS);assert(numberEdit.open()&&numberEdit.row==StreamRow::bitrate);
+        press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_UP);
+        press(PS5_PAD_BUTTON_CROSS);assert(numberEdit.open()&&draft.bitrate_kbps==25000);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(!numberEdit.open()&&settingsContent&&draft.bitrate_kbps==25000);
+        press(PS5_PAD_BUTTON_SQUARE);
+
+        row(StreamRow::resolution);
+        press(PS5_PAD_BUTTON_CROSS);assert(numberEdit.open()&&numberEdit.cursor==7&&!std::strcmp(numberEdit.digits,"12800720"));
+        press(PS5_PAD_BUTTON_UP);assert(!std::strcmp(numberEdit.digits,"12800721"));
+        press(PS5_PAD_BUTTON_CROSS);assert(numberEdit.open()&&draft==smooth);
+        press(PS5_PAD_BUTTON_R1);assert(!std::strcmp(numberEdit.digits,"16000900"));
+        press(PS5_PAD_BUTTON_R1);press(PS5_PAD_BUTTON_R1);assert(!std::strcmp(numberEdit.digits,"19201080"));
+        press(PS5_PAD_BUTTON_L1);press(PS5_PAD_BUTTON_CROSS);
+        assert(!numberEdit.open()&&draft.width==1600&&draft.height==900);
+        press(PS5_PAD_BUTTON_CROSS);press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_LEFT);
+        press(PS5_PAD_BUTTON_UP);assert(numberEdit.cursor==4&&!std::strcmp(numberEdit.digits,"16001900"));
+        press(PS5_PAD_BUTTON_CROSS);assert(numberEdit.open());
+        press(PS5_PAD_BUTTON_L1);assert(numberEdit.open());
+        press(PS5_PAD_BUTTON_CIRCLE);
+        assert(draft.width==1600&&draft.height==900);
+        draft.width=1601;
+        press(PS5_PAD_BUTTON_OPTIONS);assert(command.load()==0);
+        draft.width=1600;draft.mode=opennow::VideoMode::h264Hardware;draft.network=opennow::NetworkPolicy::fixed;
+        press(PS5_PAD_BUTTON_OPTIONS);assert(command.load()==0);
+        press(PS5_PAD_BUTTON_SQUARE);assert(draft==smooth);
+
+        row(StreamRow::decoding);
+        press(PS5_PAD_BUTTON_LEFT);assert(!draft.hardware()&&!confirmFixed);
+        testHardware=true;
+        const auto experimental=opennow::settingsFor(StreamProfile::experimental);
+        draft=experimental;
+        press(PS5_PAD_BUTTON_LEFT);
+        assert(confirmFixed&&draft==experimental&&proposal.mode==opennow::VideoMode::h264Hardware&&proposal.network==opennow::NetworkPolicy::fixed);
+        press(PS5_PAD_BUTTON_OPTIONS);press(PS5_PAD_BUTTON_SQUARE);press(PS5_PAD_BUTTON_DOWN);
+        assert(confirmFixed&&draft==experimental&&command.load()==0&&settingsRow==static_cast<unsigned>(StreamRow::decoding));
+        press(PS5_PAD_BUTTON_CIRCLE);
+        assert(!confirmFixed&&draft==experimental&&settingsContent);
+        press(PS5_PAD_BUTTON_LEFT);press(PS5_PAD_BUTTON_CROSS);
+        assert(!confirmFixed&&draft.mode==opennow::VideoMode::h264Hardware&&draft.network==opennow::NetworkPolicy::fixed);
+        assert(draft.width==1920&&draft.height==1080&&draft.fps==60&&draft.bitrate_kbps==75000);
+        press(PS5_PAD_BUTTON_RIGHT);assert(!draft.hardware()&&adjusted==0);
+        press(PS5_PAD_BUTTON_LEFT);assert(!confirmFixed&&draft.mode==opennow::VideoMode::h264Hardware);
+        row(StreamRow::codec);
+        press(PS5_PAD_BUTTON_RIGHT);assert(draft.mode==opennow::VideoMode::hevcMain10SdrHardware);
+        row(StreamRow::hdr);
+        press(PS5_PAD_BUTTON_RIGHT);assert(draft.mode==opennow::VideoMode::hevcMain10HdrHardware);
+        draft.network=opennow::NetworkPolicy::adaptive;
+        row(StreamRow::codec);
+        press(PS5_PAD_BUTTON_LEFT);assert(confirmFixed&&draft.hdr());
+        press(PS5_PAD_BUTTON_CIRCLE);assert(draft.hdr()&&draft.network==opennow::NetworkPolicy::adaptive);
+        row(StreamRow::decoding);
+        press(PS5_PAD_BUTTON_RIGHT);
+        assert(draft.mode==opennow::VideoMode::h264Software&&adjusted==2);
+        draft=opennow::settingsFor(StreamProfile::native_4k120);
+        press(PS5_PAD_BUTTON_RIGHT);
+        assert(draft.mode==opennow::VideoMode::h264Software&&draft.width==1920&&draft.height==1080&&draft.fps==60&&adjusted==2);
+        assert(publishedDefaults==smooth&&command.load()==0);
+        draft=opennow::settingsFor(StreamProfile::native_hdr120);
+        press(PS5_PAD_BUTTON_OPTIONS);assert(command.load()==0);
+        draft.fps=90;
+        press(PS5_PAD_BUTTON_OPTIONS);
+        assert(take(request)==16&&request.settings==opennow::settingsFor(StreamProfile::native_hdr90));
+        press(PS5_PAD_BUTTON_SQUARE);
+        testHardware=false;
+
+        row(StreamRow::reset);
+        press(PS5_PAD_BUTTON_CROSS);assert(take()==17);
+        ack(quality);
+        assert(draft==quality);
     }
     press(PS5_PAD_BUTTON_L1);assert(section==Section::settings);
-    press(PS5_PAD_BUTTON_DOWN);assert(settingsRow==1);
-    press(PS5_PAD_BUTTON_CROSS);assert(take()==17);
     press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent&&command.load()==0&&!http.cancelled);
-    press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_DOWN);assert(settingsPane==SettingsPane::account);
+    {
+        static opennow::art::Cache cacheArt(noFetch,nullptr);
+        artCache=&cacheArt;
+        draft.fps=55;
+        const unsigned revision=publishedSettings.revision;
+        press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_DOWN);assert(settingsPane==SettingsPane::cache);
+        press(PS5_PAD_BUTTON_RIGHT);assert(settingsContent&&settingsRow==0);
+        press(PS5_PAD_BUTTON_LEFT);assert(!artworkWanted&&settingsContent);
+        press(PS5_PAD_BUTTON_CROSS);assert(artworkWanted);
+        press(PS5_PAD_BUTTON_LEFT);assert(!artworkWanted);
+        assert(command.load()==0&&draft.fps==55&&publishedSettings.revision==revision);
+        press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_CROSS);assert(confirmClear);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(!confirmClear&&settingsContent);
+        confirmClear=true;press(PS5_PAD_BUTTON_CROSS);assert(!confirmClear&&settingsContent&&command.load()==0);
+        press(PS5_PAD_BUTTON_UP);press(PS5_PAD_BUTTON_RIGHT);assert(artworkWanted);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent);
+        artCache=nullptr;
+        press(PS5_PAD_BUTTON_UP);press(PS5_PAD_BUTTON_UP);
+        press(PS5_PAD_BUTTON_RIGHT);assert(draft.fps==55);
+        press(PS5_PAD_BUTTON_SQUARE);assert(draft==opennow::settingsFor(StreamProfile::quality));
+        press(PS5_PAD_BUTTON_CIRCLE);
+    }
+    {
+        namespace fs=std::filesystem;
+        const fs::path parent="build/host-tests/ui-cache-parent",root=parent/"artwork",sentinel=parent/"settings.bin";
+        fs::remove_all(parent);fs::create_directories(root);
+        {std::FILE* file=std::fopen(sentinel.c_str(),"wb");assert(file&&std::fputs("keep",file)>=0);std::fclose(file);}
+        {
+            opennow::art::DiskCache disk(root.c_str());
+            std::vector<unsigned char> scratch(opennow::art::DiskCache::slotBytes),data(4096,0x5a);
+            disk.initialize(scratch.data(),scratch.size());
+            disk.put("https://img.nvidiagrid.net/apps/1/ZZ/GAME_BOX_ART_01_test.jpg;f=jpg;w=272",0,data.data(),data.size());
+            assert(disk.available()&&disk.count()==1);
+        }
+        static opennow::art::Cache disabled(noFetch,nullptr,root.c_str());
+        disabled.setDiskEnabled(false);
+        while(disabled.step()){}
+        auto stats=disabled.diskStats();
+        assert(!stats.enabled&&!stats.available&&!stats.busy&&stats.count==0);
+        artCache=&disabled;artworkWanted=false;
+        settingsPane=SettingsPane::cache;settingsContent=true;settingsRow=1;
+        press(PS5_PAD_BUTTON_CROSS);assert(confirmClear);
+        press(PS5_PAD_BUTTON_CROSS);assert(!confirmClear&&settingsContent);
+        while(disabled.step()){}
+        stats=disabled.diskStats();
+        assert(!stats.enabled&&!stats.busy&&!stats.error&&!artworkWanted);
+        opennow::art::DiskCache check(root.c_str());
+        std::vector<unsigned char> scratch(opennow::art::DiskCache::slotBytes);
+        check.initialize(scratch.data(),scratch.size());
+        assert(check.available()&&check.count()==0);
+        char kept[8]{};
+        {std::FILE* file=std::fopen(sentinel.c_str(),"rb");assert(file&&std::fread(kept,1,sizeof(kept),file)==4);std::fclose(file);}
+        assert(!std::strcmp(kept,"keep"));
+        testButtons=0;draw(canvas);
+        artCache=nullptr;artworkWanted=true;
+        settingsPane=SettingsPane::stream;settingsContent=false;settingsRow=0;
+        testButtons=0;draw(canvas);
+        fs::remove_all(parent);
+    }
+    press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_DOWN);assert(settingsPane==SettingsPane::account);
     press(PS5_PAD_BUTTON_CROSS);assert(settingsContent&&settingsRow==0);
     press(PS5_PAD_BUTTON_CROSS);assert(confirmSignOut&&command.load()==0);
     press(PS5_PAD_BUTTON_L1);press(PS5_PAD_BUTTON_TRIANGLE);press(PS5_PAD_BUTTON_OPTIONS);

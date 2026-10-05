@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include "stream_settings.hpp"
 
 namespace opennow::video {
 enum class NativeCodec { h264, hevc, hevc_main10, hevc_main10_sdr };
@@ -24,17 +25,28 @@ inline unsigned nativeDpbFrames(const NativeMode& mode) {
 }
 inline std::optional<NativeMode> nativeMode(NativeCodec codec,unsigned width,unsigned height,unsigned fps) {
  if(width<320||height<180||width>3840||height>2160||(width&1)||(height&1))return {};
- if(fps!=30&&fps!=60&&fps!=90&&fps!=120)return {};
+ if(fps<30||fps>120)return {};
  if(codec!=NativeCodec::h264&&codec!=NativeCodec::hevc&&codec!=NativeCodec::hevc_main10&&codec!=NativeCodec::hevc_main10_sdr)return {};
  const bool avc=codec==NativeCodec::h264,hdr=codec==NativeCodec::hevc_main10,tenBit=hdr||codec==NativeCodec::hevc_main10_sdr;
  const unsigned coded=(height+31u)&~31u;
  const unsigned bytes=tenBit?2:1;
  const unsigned pitch=((width*bytes+255u)&~255u)/bytes;
  unsigned level;
- if(avc)level=width>2560?(fps>60?60:52):width>1920&&fps>60?52:51;
- else level=width>2560?(fps>60?156:153):width>1920?(fps>60?153:150):(fps>60?150:123);
+ if(avc){
+  const std::uint64_t blocks=std::uint64_t((width+15)/16)*((height+15)/16),rate=blocks*fps;
+  level=blocks<=36864&&rate<=983040?51:blocks<=36864&&rate<=2073600?52:60;
+ }else{
+  const std::uint64_t pixels=std::uint64_t(width)*height,rate=pixels*fps;
+  level=pixels<=2228224&&rate<=133693440?123:rate<=267386880?150:rate<=534773760?153:156;
+ }
  return NativeMode{codec,avc?1u:0x000ee049u,avc?100u:tenBit?2u:1u,level,
                    width,height,coded,pitch,fps,tenBit?SampleStorage::low_aligned_10bit:SampleStorage::nv12,hdr};
+}
+inline std::optional<NativeMode> nativeMode(const StreamSettings& settings) {
+ if(validateSettings(settings)!=SettingsError::none||!settings.hardware())return {};
+ return nativeMode(settings.mode==VideoMode::h264Hardware?NativeCodec::h264:
+                   settings.hdr()?NativeCodec::hevc_main10:NativeCodec::hevc_main10_sdr,
+                   settings.width,settings.height,settings.fps);
 }
 struct NativeSurface {
  const void* buffer=nullptr;
@@ -86,5 +98,18 @@ inline bool canNegotiateNativeMode(const NativeMode& mode,const NativeQualificat
  return qualified.decoder_created&&qualified.decode_output_validated&&qualified.gpu_surface_import&&qualified.completed_flip&&
         qualified.output_width>=mode.visible_width&&qualified.output_height>=mode.visible_height&&
         qualified.output_refresh_hz>=mode.fps&&(!mode.hdr||qualified.hdr_output);
+}
+struct NativeEnvelope {
+ NativeMode allocation{};
+ NativeQualification qualification{};
+};
+inline bool supportsSettings(const NativeEnvelope& envelope,const StreamSettings& settings) {
+ const auto requested=nativeMode(settings);
+ if(!requested)return false;
+ const auto& allocation=envelope.allocation;
+ return requested->codec==allocation.codec&&requested->profile==allocation.profile&&requested->storage==allocation.storage&&
+        requested->visible_width<=allocation.visible_width&&requested->coded_height<=allocation.coded_height&&
+        requested->pitch_components<=allocation.pitch_components&&requested->level<=allocation.level&&requested->fps<=allocation.fps&&
+        canNegotiateNativeMode(*requested,envelope.qualification);
 }
 }

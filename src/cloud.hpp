@@ -27,8 +27,9 @@ struct Session {
     char id[128]{}, signaling[1024]{}, mediaIp[128]{};
     int mediaPort=0;
     SignalingSource signalingSource=SignalingSource::none;
-    StreamProfile profile=StreamProfile::quality;
+    StreamSettings settings{};
 };
+static_assert(std::is_trivially_copyable_v<Session> && std::is_standard_layout_v<Session>);
 class Cloud {
 public:
     Cloud(Request r,void* c):request_(r),context_(c){}
@@ -36,8 +37,8 @@ public:
     void loadPage(CatalogSource source,unsigned page,const char* jwt,const char* device,int direction=1) noexcept;
     void select(int delta) noexcept;
     void focus(unsigned index) noexcept;
-    void launch(const char* jwt,const char* device,std::uint64_t now,StreamProfile profile=StreamProfile::quality) noexcept;
-    void launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,StreamProfile profile) noexcept;
+    void launch(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings={}) noexcept;
+    void launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept;
     void dismissLaunchError() noexcept;
     void tick(const char* jwt,const char* device,std::uint64_t now) noexcept;
     bool stop(const char* jwt,const char* device) noexcept;
@@ -50,7 +51,7 @@ private:
     void failLaunch(const char*) noexcept;
     bool connect(const char* jwt,const char* device,CloudView& target) noexcept;
     bool fetchPage(CatalogSource source,unsigned page,const char* jwt,const char* device) noexcept;
-    void start(const Game& game,const char* jwt,const char* device,std::uint64_t now,StreamProfile profile) noexcept;
+    void start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings) noexcept;
     bool parseSession(const Response&) noexcept;
     Request request_;void* context_;
     CloudView view_{},library_{};Session session_{};

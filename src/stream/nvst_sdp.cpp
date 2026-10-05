@@ -40,11 +40,11 @@ std::string BuildNvstSdp(
     const std::string ice_ufrag = ExtractSdpValue(answer_sdp, "a=ice-ufrag:");
     const std::string ice_pwd = ExtractSdpValue(answer_sdp, "a=ice-pwd:");
     const std::string fingerprint = ExtractSdpValue(answer_sdp, "a=fingerprint:sha-256 ");
-    const auto tuning = video::ResolveQualityTuning(settings.image_quality_mode);
+    const auto tuning = video::ResolveQualityTuning(settings.quality);
     const int max_bitrate = std::max(kOfficialMinimumBitrateKbps, settings.bitrate_kbps);
     // Qualified native profiles target the user's stable Ethernet link. A
     // 4 Mbps floor allowed GFN to starve UHD key pictures (observed QP 50).
-    const bool fixed_quality = settings.hardware;
+    const bool fixed_quality = settings.network==NetworkPolicy::fixed;
     const int minimum_bitrate = fixed_quality ? std::max(kOfficialMinimumBitrateKbps, max_bitrate * 3 / 4) : kOfficialMinimumBitrateKbps;
     const int initial_bitrate = fixed_quality ? minimum_bitrate : std::max(kOfficialMinimumBitrateKbps, max_bitrate / 4);
 
@@ -102,10 +102,10 @@ std::string BuildNvstSdp(
         "a=video.mapRtpTimestampsToFrames:1",
         "a=video.encoderCscMode:3",
         "a=video.encoderHdrCscMode:4",
-        "a=video.dynamicRangeMode:" + std::to_string(settings.hdr?1:0),
-        "a=video.bitDepth:" + std::to_string(settings.hdr?10:8),
+        "a=video.dynamicRangeMode:" + std::to_string(settings.hdr()?1:0),
+        "a=video.bitDepth:" + std::to_string(settings.tenBit()?10:8),
         "a=video.chromaFormat:1",
-        "a=video.bitStreamFormat:" + std::to_string(settings.codec==VideoCodec::hevc?1:0),
+        "a=video.bitStreamFormat:" + std::to_string(settings.codec()==VideoCodec::hevc?1:0),
         "a=video.scalingFeature1:0",
         "a=video.prefilterParams.prefilterMode:0",
         "a=video.prefilterParams.prefilterModel:0",

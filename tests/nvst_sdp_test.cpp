@@ -87,7 +87,7 @@ int main()
     settings.height = 720;
     settings.fps = 60;
     settings.bitrate_kbps = 12000;
-    settings.image_quality_mode = "Adaptive";
+    settings.quality = opennow::QualityMode::adaptive;
 
     const std::string answer =
         "v=0\r\n"
@@ -162,8 +162,8 @@ int main()
         assert(HasLine(native,"a=video.initialBitrateKbps:"+std::to_string(target.bitrate_kbps*3/4)));
         assert(HasLine(native,"a=video.maxFPS:"+std::to_string(target.fps)));
         assert(HasLine(native,"a=video.maxNumReferenceFrames:1"));
-        assert(HasLine(native,"a=video.dynamicRangeMode:"+std::to_string(target.hdr?1:0)));
-        assert(HasLine(native,"a=video.bitStreamFormat:"+std::to_string(target.codec==opennow::VideoCodec::hevc?1:0)));
+        assert(HasLine(native,"a=video.dynamicRangeMode:"+std::to_string(target.hdr()?1:0)));
+        assert(HasLine(native,"a=video.bitStreamFormat:"+std::to_string(target.codec()==opennow::VideoCodec::hevc?1:0)));
         assert(HasLine(native,"a=vqos.dynamicStreamingMode:0"));
         assert(HasLine(native,"a=vqos.drc.enable:0"));
         assert(HasLine(native,"a=vqos.resControl.cpmRtc.minResolutionPercent:100"));
@@ -186,6 +186,20 @@ int main()
     assert(hdrAnswer.find("profile-id=2;level-id=156")!=std::string::npos);
     const auto hdrSdp=opennow::webrtc::BuildNvstSdp(hdrAnswer,hdr,{});
     for(const auto* a:{"a=video.dynamicRangeMode:1","a=video.bitDepth:10","a=video.chromaFormat:1","a=video.bitStreamFormat:1","a=video.maxFPS:120"})assert(HasLine(hdrSdp,a));
+    auto sdrMain10=hdr;sdrMain10.mode=opennow::VideoMode::hevcMain10SdrHardware;sdrMain10.width=1440;sdrMain10.height=1080;sdrMain10.fps=47;
+    const auto sdrAnswer=opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,hevcOffer,sdrMain10);
+    assert(!sdrAnswer.empty()&&sdrAnswer.find("profile-id=2")!=std::string::npos);
+    const auto sdrSdp=opennow::webrtc::BuildNvstSdp(sdrAnswer,sdrMain10,{});
+    for(const auto* a:{"a=video.dynamicRangeMode:0","a=video.bitDepth:10","a=video.bitStreamFormat:1","a=video.maxFPS:47","a=video.clientViewportWd:1440","a=video.clientViewportHt:1080"})assert(HasLine(sdrSdp,a));
+    auto main8=hevcOffer;main8.replace(main8.find("profile-id=2"),12,"profile-id=1");
+    assert(opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,main8,sdrMain10).empty());
+    const auto noFmtp=std::string("v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 100\r\na=rtpmap:100 H265/90000\r\n");
+    assert(opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,noFmtp,sdrMain10).find("profile-id=2")!=std::string::npos);
+    assert(opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,noFmtp+"a=fmtp:100 sprop-max-don-diff=0\r\n",sdrMain10).find("profile-id=2")!=std::string::npos);
+    auto softwareFixed=settings;softwareFixed.network=opennow::NetworkPolicy::fixed;
+    auto decoderToggle=softwareFixed;decoderToggle.mode=opennow::VideoMode::h264Hardware;
+    assert(opennow::webrtc::BuildNvstSdp(answer,softwareFixed,{})==opennow::webrtc::BuildNvstSdp(answer,decoderToggle,{}));
+    assert(HasLine(opennow::webrtc::BuildNvstSdp(answer,decoderToggle,{}),"a=vqos.dynamicStreamingMode:0"));
     assert(opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,"v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 98\r\na=rtpmap:98 H264/90000\r\n",hdr).empty());
     auto interleaved=hevcOffer;interleaved.replace(interleaved.find("sprop-max-don-diff=0"),20,"sprop-max-don-diff=1");
     assert(opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,interleaved,hdr).empty());

@@ -29,11 +29,20 @@ if [[ $(uname -s) == Darwin ]]; then link_flags=(-Wl,-dead_strip); fi
 ${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -DOPENNOW_HOST_PREVIEW -Isrc "${link_flags[@]}" tests/main_ui_test.cpp src/demo_renderer.cpp src/ui/font.cpp src/ui/tv_ui.cpp src/ui/artwork.cpp src/cloud.cpp src/gfn.cpp build/host-tests/cJSON.o build/host-tests/qrcode.o -o build/host-tests/main-ui-test
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/settings_file_test.cpp -o build/host-tests/settings-file-test
 build/host-tests/settings-file-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/artwork_disk_test.cpp -o build/host-tests/artwork-disk-test
+build/host-tests/artwork-disk-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -DOPENNOW_PS5=1 -Isrc tests/artwork_disk_test.cpp -o build/host-tests/artwork-disk-native-test
+build/host-tests/artwork-disk-native-test
 ${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -DOPENNOW_HOST_PREVIEW -Isrc -c src/demo_renderer.cpp -o build/host-tests/artwork-renderer.o
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -DOPENNOW_HOST_PREVIEW -Isrc tests/artwork_test.cpp src/ui/artwork.cpp src/cloud.cpp src/gfn.cpp build/host-tests/artwork-renderer.o build/host-tests/cJSON.o -lpthread -o build/host-tests/artwork-test
 build/host-tests/artwork-test
 build/host-tests/main-ui-test
 build/host-tests/cloud-test
+
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -Isrc tests/stream_settings_test.cpp -o build/host-tests/stream-settings-test
+build/host-tests/stream-settings-test
+${CXX:-c++} -std=c++20 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -Isrc -Itests/stubs "${link_flags[@]}" tests/gpu_viewport_test.cpp -o build/host-tests/gpu-viewport-test
+build/host-tests/gpu-viewport-test
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/nvst_sdp_test.cpp src/stream/nvst_sdp.cpp src/stream/sdp.cpp -o build/host-tests/nvst-sdp-test
 build/host-tests/nvst-sdp-test

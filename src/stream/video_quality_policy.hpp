@@ -1,6 +1,6 @@
 #pragma once
 
-#include <string>
+#include "stream_settings.hpp"
 
 namespace opennow::video
 {
@@ -18,26 +18,17 @@ struct QualityTuning
     bool preserve_reference_deblocking;
 };
 
-inline QualityTuning ResolveQualityTuning(const std::string& mode)
+inline QualityTuning ResolveQualityTuning(QualityMode mode)
 {
-    if (mode == "Original")
+    if (mode == QualityMode::original)
         return {5, 5, 35, 5, 15, 1000, 0.0f, 0.0f, false};
 
-    if (mode == "Clarity")
+    if (mode == QualityMode::clarity)
         return {8, 10, 30, 8, 8, 1500, 0.13f, 0.20f, true};
 
     // A small resilience budget and a single spatial shader pass improve
     // dynamic scenes without adding a queued frame or raising max bitrate.
     return {6, 8, 30, 6, 10, 1250, 0.10f, 0.14f, true};
-}
-
-inline std::string NextQualityMode(const std::string& mode)
-{
-    if (mode == "Adaptive")
-        return "Clarity";
-    if (mode == "Clarity")
-        return "Original";
-    return "Adaptive";
 }
 
 } // namespace opennow::video

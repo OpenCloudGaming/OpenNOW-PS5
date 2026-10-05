@@ -11,7 +11,8 @@ int main(){
  const auto sdr90=nativeMode(NativeCodec::h264,3840,2160,90);
  assert(hdr90&&hdr90->hdr&&hdr90->fps==90&&hdr90->level==156);
  assert(sdr90&&!sdr90->hdr&&sdr90->fps==90&&sdr90->level==60);
- assert(!nativeMode(NativeCodec::h264,3840,2160,91));
+ assert(nativeMode(NativeCodec::h264,3840,2160,91));
+ assert(!nativeMode(NativeCodec::h264,3840,2160,121));
  NativeQualification q90={true,true,true,true,true,3840,2160,120};
  assert(canNegotiateNativeMode(*hdr90,q90)&&canNegotiateNativeMode(*sdr90,q90));
  q90.output_refresh_hz=60;assert(!canNegotiateNativeMode(*hdr90,q90));
