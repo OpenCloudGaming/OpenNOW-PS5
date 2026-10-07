@@ -110,14 +110,19 @@ bool Media::video(const std::uint8_t* data,std::size_t size) noexcept {
   std::snprintf(note,sizeof(note),"VIDEO codec=%s unit=%u bytes=%zu nalTypesMask=%u",settings_.codec()==VideoCodec::hevc?"HEVC":"H264",units,size,mask);opennow_media_note(note);
  }
  if(!running_||!data||!size||size>cap)return false;
+ const bool keyframe=video::Recovery::hasIdr(data,size,settings_.codec()==VideoCodec::hevc);
  pthread_mutex_lock(&lock_);
  if(compressed_.full()){
-  recovery_.invalidate();compressed_.clear();queueDepth=0;fresh_=false;clearNativePending();++queueDrops;++recoveryResets;++dropped;
-  // An incoming IDR can immediately restore references. Rejecting it here
-  // needlessly requested another large IDR and prolonged the reset storm.
+  const auto discarded=compressed_.discardBeforeKeyframe(keyframe);
+  if(discarded){queueDrops+=discarded;dropped+=discarded;}
+  else{
+   recovery_.invalidate();compressed_.clear();queueDepth=0;fresh_=false;clearNativePending();++queueDrops;++recoveryResets;++dropped;
+  }
+  // A retained or incoming keyframe restores references without a decoder
+  // reset or another network IDR request. With no safe prefix, fail closed.
  }
  if(!recovery_.accept(data,size,settings_.codec()==VideoCodec::hevc)){pthread_mutex_unlock(&lock_);return false;}
- const bool queued=compressed_.push(data,size,sceKernelGetProcessTime());queueDepth=compressed_.size();if(queueDepth.load()>queuePeak.load())queuePeak=queueDepth.load();
+ const bool queued=compressed_.push(data,size,sceKernelGetProcessTime(),keyframe);queueDepth=compressed_.size();if(queueDepth.load()>queuePeak.load())queuePeak=queueDepth.load();
  if(queued)pthread_cond_signal(&wake_);pthread_mutex_unlock(&lock_);return queued;
 }
 void* Media::decode(void* context) {
