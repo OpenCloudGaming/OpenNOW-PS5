@@ -40,8 +40,8 @@ prefix. An incoming keyframe can replace the entire full queue. These paths
 continue without changing the recovery epoch, resetting the decoder, or asking
 the server for another keyframe. If there is no safe prefix to discard, normal
 reference-loss recovery still applies; dependent pictures are never skipped
-inside a retained chain. This applies to H.264 and HEVC in both hardware and
-software queueing paths.
+inside a retained chain. This applies to H.264 in the software queueing path
+and to H.264 and HEVC in the native queueing path.
 
 This follows the keyframe-aware overflow strategy described in section 05 of
 the [NVST Client Teardown](https://claude.ai/artifact/F3LZFPou7WZNsVd9eYyfyj).
