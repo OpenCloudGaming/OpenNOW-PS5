@@ -34,6 +34,22 @@ If a selected HDR profile is unsupported by the server, stop the session and cho
 
 ## Reference recovery in 00.002.013
 
+Current development preserves the newest queued keyframe and all subsequent
+dependent pictures when a full compressed-video queue can discard an older
+prefix. An incoming keyframe can replace the entire full queue. These paths
+continue without changing the recovery epoch, resetting the decoder, or asking
+the server for another keyframe. If there is no safe prefix to discard, normal
+reference-loss recovery still applies; dependent pictures are never skipped
+inside a retained chain. This applies to H.264 and HEVC in both hardware and
+software queueing paths.
+
+This follows the keyframe-aware overflow strategy described in section 05 of
+the [NVST Client Teardown](https://claude.ai/artifact/F3LZFPou7WZNsVd9eYyfyj).
+Host regressions cover wrapped queues, multiple keyframes, handoff-buffer
+ownership, and the fallback when no space can be reclaimed safely. Reduced
+freezes during network bursts or temporary decoder stalls still need console
+acceptance; no live performance improvement is claimed.
+
 When a complete H.264 picture is lost, an overflowing queue discards a reference, or FFmpeg reports corrupt/concealed output, the renderer keeps the last good image until an IDR arrives. The decoder flushes old references before resuming and suppresses stale in-flight output. This prevents intentionally continuing with an incomplete reference chain. The user reports that periodic pixelation persists after this update; its cause is not established. Diagnostics now include actual decoded dimensions and reference-loss counters. Work toward a hardware HEVC Main10/GPU path is documented in [native hardware video](NATIVE_HARDWARE_VIDEO.md); it is now integrated and installed, with game acceptance still pending.
 
 

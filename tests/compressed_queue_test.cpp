@@ -35,4 +35,40 @@ int main(){
  q.close();assert(!q.push(pred,sizeof(pred),0));
  assert(q.open(2,32,64));assert(!q.push(pred,33,0));
  assert(q.push(pred,sizeof(pred),0));assert(q.push(pred,sizeof(pred),1));assert(q.full());
+ // Saturation can skip obsolete frames before a queued keyframe while
+ // preserving its entire reference chain and the decoder's handoff buffer.
+ const std::uint8_t h264Idr[]={0,0,0,1,0x65,0xbb},h264Pred[]={0,0,1,0x41,0xaa};
+ for(bool hevc:{false,true}){
+  const auto* key=hevc?idr:h264Idr;const auto keySize=hevc?sizeof(idr):sizeof(h264Idr);
+  const auto* delta=hevc?pred:h264Pred;const auto deltaSize=hevc?sizeof(pred):sizeof(h264Pred);
+  assert(q.open(8,32,64));
+  // Force ring wrap and retain an AU currently owned by the decoder.
+  for(unsigned i=0;i<7;++i)assert(q.push(delta,deltaSize,i));
+  for(unsigned i=0;i<7;++i)q.take();
+  assert(q.push(key,keySize,7,true));const auto decoding=q.take();
+  recovery.reset();assert(recovery.accept(key,keySize,hevc));const auto active=recovery.epoch();
+  for(unsigned i=0;i<8;++i){
+   const bool isKey=i==2||i==5;
+   assert(q.push(isKey?key:delta,isKey?keySize:deltaSize,10+i,isKey));
+  }
+  assert(q.full());assert(q.discardBeforeKeyframe(false)==5);
+  assert(q.size()==3&&recovery.current(active));
+  assert(std::memcmp(decoding.data,key,keySize)==0);
+  assert(recovery.accept(delta,deltaSize,hevc));assert(q.push(delta,deltaSize,18));
+  for(unsigned i=15;i<=18;++i){auto unit=q.take();assert(unit.received==i);assert(recovery.accept(unit.data,unit.size,hevc));}
+  // A keyframe at the head cannot make space: never discard a dependent
+  // delta and pretend the following frames are still safe to decode.
+  assert(q.push(key,keySize,20,true));
+  for(unsigned i=1;i<8;++i)assert(q.push(delta,deltaSize,20+i));
+  assert(q.discardBeforeKeyframe(false)==0&&q.full());
+  // An incoming keyframe replaces even this full queue immediately.
+  assert(q.discardBeforeKeyframe(true)==8&&q.size()==0);
+  assert(q.push(key,keySize,30,true));auto latest=q.take();assert(latest.received==30);
+  // Slot reuse must erase old keyframe markers.
+  for(unsigned i=0;i<8;++i)assert(q.push(delta,deltaSize,40+i));
+  assert(q.discardBeforeKeyframe(false)==0&&q.full());
+  recovery.invalidate();q.clear();assert(!recovery.accept(delta,deltaSize,hevc));
+  assert(recovery.accept(key,keySize,hevc));
+ }
+ q.close();assert(q.discardBeforeKeyframe(false)==0);assert(q.discardBeforeKeyframe(true)==0);
 }

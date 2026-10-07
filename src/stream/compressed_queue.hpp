@@ -27,10 +27,21 @@ public:
  void clear(){head_=count_=0;}
  unsigned size() const{return count_;}
  bool full() const{return capacity_&&count_==capacity_;}
- bool push(const std::uint8_t* data,std::size_t size,std::uint64_t received){
+ // On overflow, discard only the prefix superseded by the newest keyframe.
+ // Keep every subsequent delta: dropping one would break its reference chain.
+ // A new incoming keyframe supersedes the whole queue. Zero means there is
+ // no safe prefix to discard, so the caller still needs normal loss recovery.
+ unsigned discardBeforeKeyframe(bool incomingKeyframe){
+  unsigned discarded=incomingKeyframe?count_:0;
+  if(!incomingKeyframe)for(unsigned i=1;i<count_;++i)
+   if(keyframes_[(head_+i)%capacity_])discarded=i;
+  if(discarded){head_=(head_+discarded)%capacity_;count_-=discarded;}
+  return discarded;
+ }
+ bool push(const std::uint8_t* data,std::size_t size,std::uint64_t received,bool keyframe=false){
   if(!capacity_||full()||!data||!size||size>limit_)return false;
   const auto slot=(head_+count_)%capacity_;std::memcpy(buffers_[slot],data,size);
-  std::memset(buffers_[slot]+size,0,padding_);sizes_[slot]=size;times_[slot]=received;++count_;return true;
+  std::memset(buffers_[slot]+size,0,padding_);sizes_[slot]=size;times_[slot]=received;keyframes_[slot]=keyframe;++count_;return true;
  }
  Unit take(){
   if(!count_)return {};
@@ -40,6 +51,7 @@ public:
 private:
  std::array<std::uint8_t*,8> buffers_{};
  std::array<std::size_t,8> sizes_{};std::array<std::uint64_t,8> times_{};
+ std::array<bool,8> keyframes_{};
  std::uint8_t* spare_=nullptr;unsigned capacity_=0,head_=0,count_=0;
  std::size_t limit_=0,padding_=0;
 };
