@@ -35,16 +35,33 @@ OpenNOW PS5 lets you sign in to NVIDIA, browse the GeForce NOW catalog, and stre
 
 **[Open Cloud Gaming releases](https://github.com/OpenCloudGaming/OpenNOW-PS5/releases)** is the download location for new versions. Development, issues, and pull requests now live in **[OpenCloudGaming/OpenNOW-PS5](https://github.com/OpenCloudGaming/OpenNOW-PS5)**.
 
-The latest release is **[0.2.0](https://github.com/OpenCloudGaming/OpenNOW-PS5/releases/tag/0.2.0)**, with native content version `00.002.046`. Download `OpenNOW-PS5-0.2.0.zip` and `SHA256SUMS` from that release's Assets section. The manifest is also there.
+The latest release is **[0.3.0](https://github.com/OpenCloudGaming/OpenNOW-PS5/releases/tag/0.3.0)**, with native content version `00.003.000`. Download `OpenNOW-PS5-0.3.0.zip` and `SHA256SUMS` from that release's Assets section. The manifest is also there.
 
 Older releases, up to 0.1, are still available from the [previous repository](https://github.com/Portablelle/OpenNOW-PS5/releases). They come from a separate development history. They do **not** include this repository's newer signaling and sandbox-login fixes, and their controls and setup can differ. Follow the notes attached to the version you download. A matching PS5 content-version number does not mean that two packages contain the same code.
 
+## Screenshots
+
+| Library | Store |
+| --- | --- |
+| ![Library with cover art, store marks and the focused game panel](docs/screenshots/library.jpg) | ![GeForce NOW catalog grid](docs/screenshots/browse.jpg) |
+| **Game details** | **Sign in** |
+| ![Game details with store selection, Play and Add to Home Screen](docs/screenshots/detail-action.jpg) | ![NVIDIA device-code sign-in with QR code](docs/screenshots/signin-code.jpg) |
+| **Streaming settings** | **Input & controllers** |
+| ![Streaming settings](docs/screenshots/settings-stream.jpg) | ![Controller dead zones, vibration and mouse sensitivity](docs/screenshots/settings-controller.jpg) |
+| **Queue** | **Home-screen tile created** |
+| ![Session queue stage](docs/screenshots/queued.jpg) | ![Add to Home Screen result](docs/screenshots/tile-success.jpg) |
+
+Screenshots come from the host preview renderer (`tools/preview-port.sh`) with live GeForce NOW cover art.
+
 ## What works
 
-- NVIDIA device-code sign-in, saved login, and automatic credential renewal.
-- Separate account Library and Browse sections, real cover art, search, session allocation, and cancellation.
+- A controller-first interface that follows OpenNOW's console mode, with store brand marks and frame-time animation.
+- NVIDIA device-code sign-in, saved login, and automatic credential renewal, including renewal during a stream.
+- Separate account Library and Store sections, real cover art, search, session allocation, queue progress, and cancellation.
+- Session resume after an app restart, and detection of a session that is already running.
+- Home-screen tiles that launch one game directly (see below).
 - Native H.264 and HEVC Main10 video decoding, GPU presentation, and stereo Opus audio.
-- DualSense gamepad input, touchpad mouse controls, and an in-game keyboard.
+- DualSense gamepad input with rumble, adjustable stick dead zones, vibration and mouse sensitivity, touchpad mouse controls, and an in-game keyboard.
 - Streaming presets and custom resolution, FPS, bitrate, codec, and hardware/software decoding settings.
 - Bounded on-disk artwork caching that survives app restarts.
 - Qualified asynchronous UHD Main10 decoding with owned input buffers and GPU surface leases.
@@ -53,7 +70,6 @@ One recorded console test received and presented a 3840 × 2160 Main10 SDR strea
 
 ### Known limits
 
-- The interface and controller navigation are still under development.
 - Sustained **120 FPS gameplay and real HDR source content are not validated**. A selected profile or HDMI output mode is not proof of the stream's actual format or frame rate.
 - The server can supply a different frame rate, bitrate, or dynamic range from the requested profile. Some earlier 90 FPS requests received 60 FPS.
 - The deeper decode pipeline applies to qualified UHD Main10. H.264 still uses depth one.
@@ -90,9 +106,9 @@ These mappings describe the current development build, not every legacy release.
 | --- | --- |
 | Cross | Sign in, open game details, or activate the selected control |
 | D-pad | Move through games or Settings controls |
-| L1 / R1 | Switch top-level Library, Browse, and Settings sections |
-| Square | Refresh Library/Browse; Revert a stream-settings draft |
-| Triangle | Open catalog search |
+| L1 / R1 | Switch top-level Library, Store, and Settings sections |
+| Square | Refresh Library/Store; Revert a settings draft |
+| Triangle | Open catalog search; Add to Home Screen in game details |
 | Circle | Back or Cancel inside a screen/dialog; close the app at the top level |
 | Options | Save a valid stream-settings draft; submit catalog search |
 | Options + touchpad | Stop streaming, cancel queueing, or retry session cleanup |
