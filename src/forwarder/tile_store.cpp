@@ -195,21 +195,22 @@ int indexOf(const char* titleId) noexcept {
 }
 bool inventory(const char* root,bool (&occupied)[700],const Game* game,Entry& existing) noexcept {
     files::Directory directory(root);
-    if(!directory.valid())return directory.error()==ENOENT||directory.error()==ENOTDIR;
+    if(!directory.valid())return !game||directory.error()==ENOENT||directory.error()==ENOTDIR;
     while(const char* name=directory.next()) {
-        if(game&&(!std::strncmp(name,".opennow-stage-",15)||!std::strncmp(name,".opennow-remove-",16)))continue;
+        if(game&&(!std::strncmp(name,".opennow-stage-",15)||!std::strncmp(name,".opennow-remove-",16)||
+                  !std::strncmp(name,".opennow-upload-",16)))continue;
         const int index=indexOf(name);
         if(index>=0)occupied[index]=true;
         char child[1024],sysPath[1024];
-        if(!files::join(child,root,name)||!files::join(sysPath,child,"sce_sys"))return false;
+        if(!files::join(child,root,name)||!files::join(sysPath,child,"sce_sys")){if(game)return false;continue;}
         files::Directory folder(child);
         if(!folder.valid())continue;
         files::Directory sys(sysPath);
         if(sys.valid()) {
             auto param=readJson(sysPath,"param.json");
             char paramPath[1024];
-            if(!files::join(paramPath,sysPath,"param.json"))return false;
-            if(!param&&files::exists(paramPath)){errno=EINVAL;return false;}
+            if(!files::join(paramPath,sysPath,"param.json")){if(game)return false;continue;}
+            if(!param&&files::exists(paramPath)&&game){errno=EINVAL;return false;}
             if(param) {
                 const int embedded=indexOf(field(param.get(),"titleId"));
                 if(embedded>=0)occupied[embedded]=true;
@@ -221,7 +222,7 @@ bool inventory(const char* root,bool (&occupied)[700],const Game* game,Entry& ex
                (!candidate.game.store[0]||!game->store[0]||same(candidate.game.store,game->store)))existing=candidate;
         }
     }
-    return directory.error()==0;
+    return !game||directory.error()==0;
 }
 Result result(Code code,const char* titleId=nullptr,int error=0) noexcept {
     Result value;value.code=code;value.error=error;
@@ -230,45 +231,16 @@ Result result(Code code,const char* titleId=nullptr,int error=0) noexcept {
 }
 
 bool contents(int fd,const char* const* allowed,unsigned count) noexcept {
-    const int copy=openAt(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
-    if(copy<0)return false;
+    files::Directory directory(openAt(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW));
+    if(!directory.valid())return false;
     unsigned seen=0;bool ok=true;
-#ifdef OPENNOW_PS5
-    Fd directory(copy);
-    alignas(dirent) char buffer[8192];
-    for(;;) {
-        const int size=static_cast<int>(accountFile::checked(sceKernelGetdents(copy,buffer,sizeof(buffer))));
-        if(size<0)return false;
-        if(!size)break;
-        for(unsigned at=0;at<static_cast<unsigned>(size);) {
-            if(static_cast<unsigned>(size)-at<offsetof(dirent,d_name)+1)return false;
-            const auto* entry=reinterpret_cast<const dirent*>(buffer+at);
-            const unsigned length=entry->d_reclen;
-            if(length<offsetof(dirent,d_name)+1||length>static_cast<unsigned>(size)-at||
-               entry->d_namlen>=length - offsetof(dirent,d_name)||
-               !std::memchr(entry->d_name,0,length - offsetof(dirent,d_name)))return false;
-            at+=length;
-#else
-    DIR* directory=fdopendir(copy);
-    if(!directory){accountFile::close(copy);return false;}
-    for(;;) {
-        errno=0;const auto* entry=readdir(directory);
-        if(!entry){ok=errno==0;break;}
-#endif
-            const char* name=entry->d_name;
-            if(same(name,".")||same(name,".."))continue;
-            unsigned index=0;
-            while(index<count&&!same(name,allowed[index]))++index;
-            if(index==count||(seen&(1U<<index))){ok=false;break;}
-            seen|=1U<<index;
-#ifdef OPENNOW_PS5
-        }
-        if(!ok)break;
-#endif
+    while(const char* name=directory.next()) {
+        unsigned index=0;
+        while(index<count&&!same(name,allowed[index]))++index;
+        if(index==count||(seen&(1U<<index))){ok=false;break;}
+        seen|=1U<<index;
     }
-#ifndef OPENNOW_PS5
-    if(closedir(directory)!=0)ok=false;
-#endif
+    if(directory.error()){errno=directory.error();return false;}
     if(!ok||seen!=(1U<<count)-1){errno=EINVAL;return false;}
     return true;
 }

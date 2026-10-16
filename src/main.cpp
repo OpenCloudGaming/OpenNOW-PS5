@@ -200,6 +200,7 @@ void publishTile(opennow::ui::HomeTile tile) noexcept {
 }
 #ifndef OPENNOW_HOST_PREVIEW
 void* tileThread=nullptr;
+char tileProgressStep[96]{};
 bool tileAvailable() noexcept {return opennow::forwarder::available();}
 void tileProgress(void*,const opennow::forwarder::Progress& progress) noexcept {
     using Phase=opennow::forwarder::Phase;
@@ -207,7 +208,11 @@ void tileProgress(void*,const opennow::forwarder::Progress& progress) noexcept {
         progress.phase==Phase::downloadingBackground?"Downloading the background":progress.phase==Phase::writing?"Writing the tile":
         progress.phase==Phase::publishing?"Preparing installation":progress.phase==Phase::installing?"Installing the tile":"Finishing";
     pthread_mutex_lock(&viewMutex);
-    publishedTile.step=step;publishedTile.percent=progress.total?progress.completed*100/progress.total:0;++publishedTile.revision;
+    if(progress.phase==Phase::installing&&progress.total) {
+        std::snprintf(tileProgressStep,sizeof(tileProgressStep),"Installing: %u / %u KiB",progress.completed/1024,progress.total/1024);
+        step=tileProgressStep;
+    }
+    publishedTile.step=step;publishedTile.percent=progress.total?static_cast<unsigned>(std::uint64_t(progress.completed)*100/progress.total):0;++publishedTile.revision;
     pthread_mutex_unlock(&viewMutex);
 }
 void* tileWorker(void*) {
@@ -612,8 +617,11 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     std::uint64_t rumbleSession=0;
     opennow::StreamSettings defaults,launch;opennow::ui::SettingsInfo settings;opennow::ui::AudioInfo audio;
     static opennow::ui::HomeTile tile;
+    static char tileStep[96];
     pthread_mutex_lock(&viewMutex);
     tile=publishedTile;
+    std::snprintf(tileStep,sizeof(tileStep),"%s",tile.step);
+    tile.step=tileStep;
     v=published;cv=publishedCloud;lv=publishedLibrary;streaming=publishedStream;inputReady=publishedInputReady;sessionOwned=publishedSession;
     streamFailed=publishedStreamFailure;defaults=publishedDefaults;launch=publishedLaunch;settings=publishedSettings;audio=publishedAudio;
     rumbleNotice=publishedRumble;rumbleSession=publishedStreamGeneration;

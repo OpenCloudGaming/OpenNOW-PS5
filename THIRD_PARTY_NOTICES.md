@@ -42,12 +42,10 @@ OpenNOW PS5 is an independent native adaptation made possible by **OpenCloudGami
   Its credit to `https://ps5-forwarder.mph.am`, bundled module 1212, is
   preserved. PNG streaming is original project code. Game artwork belongs to
   its publishers, is fetched from GFN at runtime, and is not redistributed.
-- The independent tile installer's read-only process lookup references the
-  public SDK v0.42, websrv, etaHEN, ShadowMountPlus, and matching FreeBSD
-  releng/11.4 sources. Research pins and the AppInfo layout disagreement are
-  documented in [resolver evidence](docs/TILE_INSTALLER_RESOLVER.md) and
-  `upstream-lock.json`. These are ABI and behavior references, not copied
-  credential-mutation implementations. No app process is elevated.
+- The independent tile installer receives bounded file uploads over its
+  elfldr socket. It does not inspect another process's credentials or root.
+  The [streaming design](docs/TILE_INSTALLER_RESOLVER.md) describes the file
+  whitelist, limits, validation, and cleanup. No app process is elevated.
 
 The unmodified template inputs have these SHA-256 pins:
 

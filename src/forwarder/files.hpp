@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "../account_file.hpp"
+#include <cstdlib>
 #include <dirent.h>
 
 #ifdef OPENNOW_PS5
@@ -11,14 +12,15 @@ int sceKernelRmdir(const char*);
 #endif
 
 namespace opennow::forwarder::files {
+inline constexpr unsigned directoryReadBytes=64*1024;
 inline bool join(char (&out)[1024],const char* parent,const char* name) noexcept {
     const int n=std::snprintf(out,sizeof(out),"%s/%s",parent,name);
     return n>0&&static_cast<std::size_t>(n)<sizeof(out);
 }
 class Directory {
 public:
-    explicit Directory(const char* path) noexcept {
-        fd_=accountFile::open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
+    explicit Directory(const char* path) noexcept:Directory(accountFile::open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW)){}
+    explicit Directory(int fd) noexcept:fd_(fd) {
         if(fd_<0){error_=errno;return;}
 #ifndef OPENNOW_PS5
         dir_=fdopendir(fd_);
@@ -27,6 +29,7 @@ public:
     }
     ~Directory() {
 #ifdef OPENNOW_PS5
+        std::free(buffer_);
         if(fd_>=0)accountFile::close(fd_);
 #else
         if(dir_)closedir(dir_);
@@ -40,10 +43,15 @@ public:
         if(!valid())return nullptr;
         for(;;) {
 #ifdef OPENNOW_PS5
+            if(!buffer_) {
+                buffer_=static_cast<char*>(std::malloc(directoryReadBytes));
+                if(!buffer_){error_=ENOMEM;return nullptr;}
+            }
             if(offset_==size_) {
-                const int n=static_cast<int>(accountFile::checked(sceKernelGetdents(fd_,buffer_,sizeof(buffer_))));
+                const int n=static_cast<int>(accountFile::checked(sceKernelGetdents(fd_,buffer_,directoryReadBytes)));
                 if(n<0){error_=errno;return nullptr;}
                 if(!n)return nullptr;
+                if(static_cast<unsigned>(n)>directoryReadBytes){error_=EIO;return nullptr;}
                 size_=static_cast<unsigned>(n);offset_=0;
             }
             if(size_-offset_<offsetof(dirent,d_name)+1){error_=EIO;return nullptr;}
@@ -65,7 +73,7 @@ public:
 private:
     int fd_=-1,error_=0;
 #ifdef OPENNOW_PS5
-    alignas(dirent) char buffer_[8192]{};
+    char* buffer_=nullptr;
     unsigned offset_=0,size_=0;
 #else
     DIR* dir_=nullptr;

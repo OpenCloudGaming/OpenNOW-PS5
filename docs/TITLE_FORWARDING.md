@@ -98,7 +98,8 @@ always use the bundled template, sandbox staging directory, and fixed installer
 inventory roots. Custom scan roots are not accepted over the protocol.
 
 The existing UI worker keeps its `Job`/`Progress` interface. `Phase::installing`
-marks the payload handoff. No component under `src/ui/` changes here.
+reports completed and total upload bytes. The sheet displays those counts in
+KiB. No component under `src/ui/` changes here.
 
 ## Installer boundary
 
@@ -109,20 +110,21 @@ folder before submitting an install request and removes it after the reply.
 Artwork downloading and encoding stay in the sandbox.
 
 The versioned, little-endian protocol uses the same socket as the ELF stream.
-Requests contain an operation, the caller's PID, a request ID, and either a
-simple stage name or a title ID. They never contain credentials, arbitrary
-paths, or artwork. Fixed frame sizes, bounded entry counts, socket timeouts,
-and matching request IDs make malformed or incomplete exchanges fail closed.
+Requests contain an operation, a request ID, and a title ID only for removal.
+Installation then streams the seven whitelisted staged files in 64 KiB chunks,
+with bounded 64-bit file lengths and an end frame. Requests never contain a
+PID, stage name, arbitrary path, or credentials. Fixed frame sizes, bounded
+entry counts, socket timeouts, and matching request IDs make malformed or
+incomplete exchanges fail closed.
 The packaged ELF must end exactly at its section table so protocol bytes
 cannot be consumed as part of the executable.
 
-Every operation verifies that the supplied PID belongs to `PPSA99082` and
-resolves its root from read-only kernel process metadata. Missing, malformed,
-ambiguous, or mismatched metadata rejects the operation. No directory search,
-marker file, credential change, or app-path rebase is used. The installer reads
-only the named child of that process's `download0/opennow/tile-stage` directory.
-The [resolver evidence](TILE_INSTALLER_RESOLVER.md) records the public ABI,
-source pins, conflicting title layouts, and required console checks.
+The installer writes a fresh hidden upload folder under `/data/homebrew`,
+synchronizes it, and passes it to the shared atomic installer. It removes the
+upload folder after success, failure, or disconnect. It never opens the app's
+sandbox or depends on process-title or root metadata. List and remove also
+need no PID check. The [streaming design](TILE_INSTALLER_RESOLVER.md) records
+the whitelist, caps, cleanup, and failure reporting.
 
 `available()` lazily probes the bundled payload and elfldr from a detached
 worker, caches the answer, and returns without blocking the render thread.
@@ -166,10 +168,10 @@ renames the hidden folder over its exclusive empty reservation. Metadata,
 allocation, validation, copying, listing, and removal share one implementation
 in `src/forwarder/tile_store.cpp`, compiled by the payload and host tests.
 
-The mounter never sees incomplete metadata. Cancellation before payload handoff
-and ordinary failures clean the app's stage. Installation is not cancellable
-after handoff; its final result takes precedence over a late cancel request.
-A power loss may leave a hidden stage or an empty reservation, which can be
+The mounter never sees incomplete metadata. Cancellation during upload closes
+the socket and cleans both transfer stages. After the end frame, installation
+is not cancellable; its final result takes precedence over a late cancel request.
+A power loss may leave a hidden upload, hidden stage, or empty reservation, which can be
 removed while OpenNOW is closed. Existing valid tiles are not rewritten on
 retry. Removal renames a recognized
 tile out of the visible namespace before deleting it. An ownership record
@@ -180,19 +182,19 @@ allows interrupted deletion to finish on retry. Symlinks are not traversed.
 `bash tools/test-forwarder.sh` tests metadata against pinned `psfwd`, title-ID
 collisions and exhaustion, standard-reader interoperability, cancellation,
 failed publication, interrupted removal, symlink safety, argument parsing,
-PID/title/root resolution, protocol framing and replies, launch resolution,
-and encoded images. `bash tools/test-port.sh` includes
+streamed-file validation, real dispatcher-to-store uploads, protocol framing
+and replies, launch resolution, and encoded images. `bash tools/test-port.sh` includes
 these checks under ASan and UBSan. `tools/verify-forwarder-template.py` checks
 both vendored program hashes. The writer checks them before creation too.
 
 After committing the source and running the native GPU build, import audit,
 and `tools/package-manifest.py`, run
-`python3 tools/package-tile-test.py --output ~/.capy/work/build-tiles/`.
+`python3 tools/package-tile-test.py --output ~/.capy/work/build-stream-tiles/`.
 It rejects a dirty or mismatched source commit, verifies every packaged hash
 and required asset, checks the installer ELF extent, and writes a deterministic
 test ZIP with its source manifest and a separate `SHA256SUMS` file.
 
-Console tests are still required for PID metadata visibility from elfldr,
+Console tests are still required for streamed installation through elfldr,
 unchanged sandbox font/certificate/storage access, GPU qualification, native
 directory enumeration and writes, ShadowMountPlus registration and
 removal, artwork display, launcher bootstrap, argv delivery, saved-login

@@ -79,6 +79,9 @@ bool decode(const unsigned char* bytes,std::size_t size,unsigned width,unsigned 
 
 int main() {
     const auto input=game();
+    const Code failures[]={Code::invalidGame,Code::stagingError,Code::transportError,Code::protocolError,Code::uploadError,Code::ioError};
+    for(unsigned i=0;i<std::size(failures);++i)for(unsigned j=0;j<i;++j)
+        assert(std::strcmp(message(failures[i]),message(failures[j])));
     char param[4096],forward[4096],upstream[4096];
     assert(paramJson(input,"PPSA99200",param,sizeof(param)));
     assert(forwarderJson(input,forward,sizeof(forward)));

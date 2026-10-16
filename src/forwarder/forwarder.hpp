@@ -8,7 +8,7 @@ namespace opennow::forwarder {
 inline constexpr char targetTitleId[]="PPSA99082";
 enum class Code { created, alreadyExists, removed, notFound, listed, available, unavailable,
                   invalidGame, noFreeTitleId, conflict, cancelled, artworkError, templateError,
-                  ioError };
+                  ioError, stagingError, transportError, protocolError, uploadError };
 struct Result {
     Code code=Code::ioError;
     int error=0;
