@@ -20,6 +20,8 @@ ${CXX:-c++} -std=c++20 "${flags[@]}" -Isrc -ffunction-sections -fdata-sections -
 build/host-tests/forward-launch-worker-test
 ${CXX:-c++} "${cppflags[@]}" tests/forwarder_image_test.cpp src/forwarder/image.cpp -o build/host-tests/forwarder-image-test
 build/host-tests/forwarder-image-test
+${CXX:-c++} "${cppflags[@]}" -DOPENNOW_PS5=1 -Itests/stubs/ps5-dirent tests/forwarder_native_directory_test.cpp -o build/host-tests/forwarder-native-directory-test
+build/host-tests/forwarder-native-directory-test
 ${CXX:-c++} "${cppflags[@]}" tests/forwarder_test.cpp src/forwarder/forwarder.cpp src/forwarder/installer_client.cpp src/forwarder/tile_store.cpp src/forwarder/image.cpp \
     src/forwarder/launch_args.cpp build/host-tests/forwarder-cJSON.o build/host-tests/psfwd.o -pthread build/host-tests/app-paths.o -o build/host-tests/forwarder-test
 build/host-tests/forwarder-test

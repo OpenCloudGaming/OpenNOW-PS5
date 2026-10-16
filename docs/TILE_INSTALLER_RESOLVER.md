@@ -77,5 +77,19 @@ It covers installation, idempotence, listing/removal, rejected transfers,
 storage errors, and cleanup. `bash tools/test-forwarder.sh` runs these tests
 with ASan and UBSan; `bash tools/test-port.sh` includes them in the full suite.
 Native GPU compilation, import auditing, and ELF extent validation remain
-separate checks. Console installation and ShadowMountPlus registration still
-require hardware validation.
+separate checks. The full app upload flow and ShadowMountPlus registration
+still require hardware validation.
+
+Native directory reads use a shared 64 KiB heap buffer for inventory, stage
+validation, and cleanup. Console probes showed that populated directories
+return `EINVAL` for requests smaller than 64 KiB, including the former 8 KiB
+buffer. A native-adapter host regression reproduces that exact failure. The
+corrected adapter was exercised on the console through scans, pinned-template
+copying, metadata rewrite, atomic directory rename, and cleanup. The complete
+shared store also created and removed a throwaway console title successfully.
+
+Foreign collision roots are best-effort. Observed folder names still reserve
+their IDs; readable JSON adds embedded IDs. Unreadable roots and unreadable or
+malformed foreign metadata cannot block installation. The homebrew destination
+keeps its stricter enumeration and metadata checks. Disconnected or unreadable
+storage cannot provide complete collision coverage.
