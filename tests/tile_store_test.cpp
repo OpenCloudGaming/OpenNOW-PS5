@@ -181,6 +181,13 @@ int main() {
     assert(store::install(source.c_str(),paths).code==Code::created);
     fs::remove_all(abandoned);
     assert(store::remove(id,paths).ok());
+    const auto upload=root/".opennow-upload-ready",partialUpload=root/".opennow-upload-partial";
+    stage(upload,input);
+    fs::create_directories(partialUpload/"sce_sys");write(partialUpload/"sce_sys/param.json","{partial");
+    const auto uploaded=store::install(upload.c_str(),paths);
+    assert(uploaded.code==Code::created&&!std::strcmp(uploaded.titleId,id));
+    assert(store::remove(id,paths).ok());
+    fs::remove_all(upload);fs::remove_all(partialUpload);
 
     int pipefd[2];assert(pipe(pipefd)==0);
     pid_t child=fork();assert(child>=0);

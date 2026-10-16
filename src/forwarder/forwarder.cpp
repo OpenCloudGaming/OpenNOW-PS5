@@ -22,8 +22,8 @@ Result result(Code code,int error=0) noexcept {
     Result value;value.code=code;value.error=error;return value;
 }
 bool cancelled(const Job& job) noexcept {return job.cancel&&job.cancel->load();}
-void progress(const Job& job,Phase phase,unsigned n) noexcept {
-    if(job.progress)job.progress(job.context,{phase,n,6});
+void progress(const Job& job,Phase phase,unsigned n,unsigned total=6) noexcept {
+    if(job.progress)job.progress(job.context,{phase,n,total});
 }
 bool bounded(const char* value,std::size_t capacity) noexcept {return std::memchr(value,0,capacity)!=nullptr;}
 bool fetch(const Game& game,art::Kind kind,unsigned char* compressed,std::uint32_t* pixels,
@@ -131,7 +131,7 @@ Result create(const Game& game,const Options& requested,const Job& job) noexcept
     if(!inventory.ok()&&inventory.code!=Code::notFound)return inventory;
     if(existing.value.code==Code::alreadyExists)return existing.value;
     if(!store::verifyTemplate(options.paths.templateRoot))return result(Code::templateError,errno);
-    if(!files::mkdir(stageRoot))return result(Code::ioError,errno);
+    if(!files::mkdir(stageRoot))return result(Code::stagingError,errno);
     static unsigned sequence=0;
     char stage[1024],name[64]{};
     bool staged=false;
@@ -141,23 +141,25 @@ Result create(const Game& game,const Options& requested,const Job& job) noexcept
         if(accountFile::makeDirectory(stage,0755)==0){staged=true;break;}
         if(errno!=EEXIST)break;
     }
-    if(!staged)return result(Code::ioError,errno);
+    if(!staged)return result(Code::stagingError,errno);
     auto value=result(Code::artworkError);
+    bool handedOff=false;
     if(writeStage(stage,game,options,job)) {
         progress(job,Phase::publishing,4);
-        if(!files::syncDirectory(stageRoot))value=result(Code::ioError,errno);
+        if(!files::syncDirectory(stageRoot))value=result(Code::stagingError,errno);
         else if(!cancelled(job)) {
-            progress(job,Phase::installing,5);
+            progress(job,Phase::installing,0,0);
             if(!cancelled(job)) {
+                handedOff=true;
 #ifdef OPENNOW_PS5
-                value=installer::install(name);
+                value=installer::install(stage,job);
 #else
                 value=store::install(stage,options.paths);
 #endif
             }
         }
     } else value.error=errno;
-    if(cancelled(job)&&!value.ok())value=result(Code::cancelled);
+    if(cancelled(job)&&!value.ok()&&!handedOff)value=result(Code::cancelled);
     const int error=errno;
     (void)files::erase(stage);
     (void)files::syncDirectory(stageRoot);
@@ -175,13 +177,17 @@ const char* message(Code code) noexcept {
     case Code::listed:return "Home-screen tiles loaded.";
     case Code::available:return "Home-screen forwarding is available.";
     case Code::unavailable:return "Tile installer unavailable. Check elfldr on port 9021.";
-    case Code::invalidGame:return "The game, title ID or staging request is invalid.";
+    case Code::invalidGame:return "The selected game or tile title ID is invalid.";
     case Code::noFreeTitleId:return "No unused forwarder title ID is available.";
     case Code::conflict:return "The folder is not a recognized OpenNOW tile; nothing was removed.";
     case Code::cancelled:return "Tile creation cancelled.";
     case Code::artworkError:return "Could not download or write the game's artwork. Check connection and free space.";
     case Code::templateError:return "The shared forwarder template is missing or invalid.";
-    case Code::ioError:return "Could not finish the tile operation. Check storage and free space.";
+    case Code::ioError:return "The tile installer could not finish the operation in /data/homebrew.";
+    case Code::stagingError:return "Could not prepare or read the staged tile files in OpenNOW storage.";
+    case Code::transportError:return "The tile installer connection failed or timed out. Check elfldr on port 9021.";
+    case Code::protocolError:return "The tile installer rejected the upload or returned an invalid reply.";
+    case Code::uploadError:return "The tile installer could not write or clean its upload folder in /data/homebrew.";
     }
     return "Forwarder operation failed.";
 }

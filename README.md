@@ -82,7 +82,8 @@ OpenNOW accepts standard PS5 forwarder tiles that launch one GeForce NOW
 catalog variant directly, using saved login and stream settings. This needs
 ShadowMountPlus and either the standard launcher or a compatible elfldr.
 Creation, listing, and removal use a bundled independent installer through
-elfldr on port 9021. OpenNOW stays sandboxed, including its fonts, certificates,
+elfldr on port 9021. Tiles stream over that socket without sandbox discovery.
+OpenNOW stays sandboxed, including its fonts, certificates,
 GPU startup, and saved data. See [title forwarding](docs/TITLE_FORWARDING.md) for the argv
 contract, permission requirements, API, and remaining console tests.
 

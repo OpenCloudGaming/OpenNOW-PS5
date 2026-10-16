@@ -197,7 +197,8 @@ bool inventory(const char* root,bool (&occupied)[700],const Game* game,Entry& ex
     files::Directory directory(root);
     if(!directory.valid())return directory.error()==ENOENT||directory.error()==ENOTDIR;
     while(const char* name=directory.next()) {
-        if(game&&(!std::strncmp(name,".opennow-stage-",15)||!std::strncmp(name,".opennow-remove-",16)))continue;
+        if(game&&(!std::strncmp(name,".opennow-stage-",15)||!std::strncmp(name,".opennow-remove-",16)||
+                  !std::strncmp(name,".opennow-upload-",16)))continue;
         const int index=indexOf(name);
         if(index>=0)occupied[index]=true;
         char child[1024],sysPath[1024];

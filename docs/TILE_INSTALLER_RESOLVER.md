@@ -1,71 +1,81 @@
-# Tile installer PID lookup
+# Streaming tile installation
 
-The installer uses read-only process metadata to associate the requesting PID
-with one sandbox. It never scans `/mnt/sandbox` or looks for marker files.
+OpenNOW stays sandboxed. It prepares its complete seven-file tile in
+`/download0/opennow/tile-stage/`, then streams those files through the socket
+used to launch `opennow-tile-installer.elf` with elfldr. The payload never needs
+to find or open OpenNOW's sandbox. Listing and removal also run independently
+of the app PID, title metadata APIs, or kernel file-table visibility.
 
-`sceKernelGetAppInfo(pid, ...)` must return exactly `PPSA99082` before and
-after the lookup. The two calls must also report the same application ID.
-Between those calls, `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_FILEDESC, pid)`
-must return exactly one valid root-directory vnode. Its path must match
-`/mnt/sandbox/PPSA99082_NNN`, with exactly three decimal suffix digits.
-The installer rejects missing, ambiguous, truncated, oversized, or malformed
-records. CWD, jail, executable, and ordinary file entries cannot supply the root.
+Release `00.003.000` attempted to resolve the app's root from process metadata.
+Console installation returned `invalidGame` with `EPERM`, despite a working
+transport. Version `00.003.001` removes that dependency rather than trying a
+different AppInfo layout or guessing a sandbox directory.
 
-## Source evidence and limits
+## Wire format
 
-These sources establish the public ABI and upstream PID-to-root semantics.
-They do not establish that Sony's shipped kernel exposes this query on every
-firmware. None of the inspected PS5 projects directly exercises this root-entry
-lookup. A console test must confirm visibility, record layout, and path output
-from the independent elfldr payload. An unsupported query fails closed without
-elevation or a guessed-directory fallback.
+Protocol version 2 keeps the fixed-endian `ONTI` header, request IDs, bounded
+result/list frames, and five-second per-I/O timeout. An install request carries
+only its operation and request ID. A remove request also carries a title ID.
+No request carries a PID, stage name, arbitrary source path, or credentials.
 
-- The [SDK v0.42 sysctl header](https://github.com/ps5-payload-dev/sdk/blob/4eb701204fc3f8d31e84cf8ca272974e2be9c867/include/freebsd/sys/sysctl.h#L904)
-  declares `KERN_PROC_FILEDESC`. Its [process header](https://github.com/ps5-payload-dev/sdk/blob/4eb701204fc3f8d31e84cf8ca272974e2be9c867/include/freebsd/sys/user.h#L337-L408)
-  declares `struct kinfo_file`, including the root descriptor, vnode type,
-  attribute-valid flag, packed record length, and path. Native parsing uses
-  those declarations and `offsetof`, not numeric kernel-memory offsets.
-- The SDK identifies these headers as FreeBSD releng/11.4. The matching
-  [read-only handler](https://github.com/freebsd/freebsd-src/blob/d106002967eff712894ab8b5337bbbff106ce5e0/sys/kern/kern_descrip.c#L3599-L3620)
-  selects the fourth MIB component as the PID. Its [root export](https://github.com/freebsd/freebsd-src/blob/d106002967eff712894ab8b5337bbbff106ce5e0/sys/kern/kern_descrip.c#L3558-L3562)
-  associates that process's `fd_rdir` with `KF_FD_TYPE_ROOT`.
-  [Vnode export](https://github.com/freebsd/freebsd-src/blob/d106002967eff712894ab8b5337bbbff106ce5e0/sys/kern/vfs_vnops.c#L2345-L2359)
-  fills the type and path. [Path resolution](https://github.com/freebsd/freebsd-src/blob/d106002967eff712894ab8b5337bbbff106ce5e0/sys/kern/vfs_cache.c#L2194-L2212)
-  is relative to the caller's root, so the installer must already run with
-  elfldr's normal global root. The app remains sandboxed.
-- [Websrv's payload loader](https://github.com/ps5-payload-dev/websrv/blob/7748df9d2a43822a5ebfda149f43d4f2696d640b/src/ps5/elfldr.c#L328-L346)
-  demonstrates that independent loader environment. Its root/jail mutation is
-  upstream loader context, not code copied into OpenNOW or the installer.
-- [etaHEN's AppInfo declaration](https://github.com/etaHEN/etaHEN/blob/dafa13b562ddb137a4b4a97b9aaa287c0c57cc9c/Source%20Code/util/source/common_utils.c#L26-L41)
-  and PID query at lines 416-418 provide the selected title layout, with
-  `app_type` before `title_id[10]`. The same layout occurs in its daemon and
-  ShellUI sources. Compile-time assertions check the title offset `0x14` and
-  structure size `0x60`.
-- [ShadowMountPlus declares a different AppInfo layout](https://github.com/drakmor/ShadowMountPlus/blob/98c524890176c7b474fcb03387bec88c4a559861/include/sm_platform.h#L31-L36),
-  with the title at `0x10`. The installer chooses etaHEN's repeated layout
-  rather than probing multiple offsets. This disagreement requires console
-  confirmation; a mismatched layout is rejected.
-- etaHEN's [marker search](https://github.com/etaHEN/etaHEN/blob/dafa13b562ddb137a4b4a97b9aaa287c0c57cc9c/Source%20Code/daemon/source/commands.cpp#L667-L679)
-  supports the three-digit path grammar, but does not establish PID ownership.
-  ShadowMountPlus's [highest-suffix search](https://github.com/drakmor/ShadowMountPlus/blob/98c524890176c7b474fcb03387bec88c4a559861/src/sm_fakelib.c#L397-L438)
-  also cannot establish ownership. Neither mechanism is used.
+Each install request is followed by one file frame and its raw bytes for every
+required file, then an end frame. A file frame includes a relative path and
+64-bit byte length. Both endpoints stream in 64 KiB chunks instead of holding
+the tile in memory. Only these exact paths are accepted:
 
-The SDK source headers match the installed, hash-verified SDK v0.42 archive.
-Research revisions are recorded in `upstream-lock.json`. No implementation
-from these research repositories is redistributed by this lookup.
+| Relative path | Maximum bytes |
+| --- | ---: |
+| `eboot.bin` | 2097152 |
+| `sce_module/libc.prx` | 2097152 |
+| `sce_sys/param.json` | 16383 |
+| `sce_sys/icon0.png` | 2097152 |
+| `sce_sys/pic0.dds` | 8294548 |
+| `sce_sys/pic1.dds` | 8294548 |
+| `forwarder.json` | 16383 |
 
-The helper uses the SDK's ordinary payload CRT. Its `payload_init` calls
-`__patch_init`, which adjusts capabilities and attributes for its own PID
-from `SYS_getpid`. These are active SDK startup writes in the independent
-helper, not dormant symbols. The requesting app PID is never passed to that
-startup code. Project resolver and dispatcher code does not call credential
-or root setters. OpenNOW uses the separate application CRT, not the payload CRT.
+Files must be nonempty. Unknown names, traversal, duplicate or missing files,
+oversized lengths, wrong request IDs, invalid padding, truncated frames, and
+short file bodies fail closed. The client reports upload bytes through the
+existing `Phase::installing` progress callback.
+
+## Filesystem boundary
+
+The payload creates an exclusive hidden `.opennow-upload-*` folder under
+`/data/homebrew`. It creates only the required subdirectories and writes files
+with exclusive, no-follow opens. After synchronizing the files and directories,
+it calls the existing shared `store::install` implementation. That validates
+metadata, pins both program hashes, allocates a collision-free title ID, and
+publishes a synchronized hidden sibling by atomic rename. Existing valid tiles
+are not overwritten. Inventory ignores hidden uploads, including incomplete
+metadata left by another transfer.
+
+The payload removes its upload folder after success, rejection, or disconnect.
+A power loss or forced process termination can leave a hidden upload folder;
+it is not a visible title and can be removed while no installer is running.
+The app removes its own sandbox stage after the request. Cancellation during
+upload closes the connection; once the end frame is sent, the installer must
+finish and its result takes precedence over a late cancel request.
+
+Client stage-read failures, socket failures, protocol/metadata rejection, and
+payload upload-storage failures have separate result codes and messages.
+Payload filesystem failures drain only the remaining bounded, valid stream
+before returning their error so they are not disguised as a broken pipe.
+
+The independent payload uses the ordinary public SDK CRT, which adjusts its
+own process capabilities during startup. No app PID is supplied to that code.
+OpenNOW uses its separate application CRT and never changes its root or
+credentials for tile operations. The socket belongs to the already privileged
+elfldr environment; this protocol is not a general-purpose authenticated service.
 
 ## Verification
 
-`tests/sandbox_resolver_test.cpp` injects identity results and packed snapshots
-into the same parser used by the native payload. It covers decoys, wrong and
-unterminated titles, changed application IDs, duplicate roots, bad attributes,
-path grammar, record boundaries, query failures, and output capacity.
-`bash tools/test-forwarder.sh` runs it with ASan and UBSan. The payload build
-also compiles the real SDK record type and read-only imports.
+`tests/installer_protocol_test.cpp` exercises framing, lengths, whitelisted
+paths, partial I/O, result validation, progress, and cancellation.
+`tests/installer_stream_test.cpp` pipes a real staged tile through `wire::Io`
+into the actual payload dispatcher and shared store under temporary roots.
+It covers installation, idempotence, listing/removal, rejected transfers,
+storage errors, and cleanup. `bash tools/test-forwarder.sh` runs these tests
+with ASan and UBSan; `bash tools/test-port.sh` includes them in the full suite.
+Native GPU compilation, import auditing, and ELF extent validation remain
+separate checks. Console installation and ShadowMountPlus registration still
+require hardware validation.

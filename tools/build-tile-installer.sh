@@ -14,6 +14,6 @@ PS5_PAYLOAD_SDK="$sdk" "$sdk/bin/prospero-clang" -std=c11 "${common[@]}" -Wno-un
     -c src/vendor/cJSON.c -o "$objects/cJSON.o"
 PS5_PAYLOAD_SDK="$sdk" "$sdk/bin/prospero-clang++" -std=c++20 "${common[@]}" \
     -fno-exceptions -fno-rtti -Wl,--build-id=none -Wl,--gc-sections \
-    tooling/tile_installer/main.cpp src/forwarder/tile_store.cpp src/forwarder/sandbox.cpp \
+    tooling/tile_installer/main.cpp src/forwarder/tile_store.cpp \
     src/forwarder/launch_args.cpp "$objects/cJSON.o" -o "$output"
 python3 tools/validate-elevation-helper.py "$output"
