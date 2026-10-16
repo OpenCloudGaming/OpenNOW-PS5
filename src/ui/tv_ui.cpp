@@ -1538,19 +1538,19 @@ void searchScreen(Canvas& c, const Model& m) {
     if(text.empty())label(c,Face::black,36,fx+84,cy,"Type a game title",muted);
     else caret+=label(c,Face::black,36,fx+84,cy,text,face)+4;
     c.roundRect(caret,cy-22,4,44,2,accent);
-    const float x0=x+30, y0=y+186;
+    const float x0=x+(w-1228)/2, y0=y+186;
     for(unsigned i=0;i<CatalogSearch::count;++i) {
         const unsigned col=CatalogSearch::column(i), row=CatalogSearch::row(i);
-        const float kx=col<10?x0+col*124.0f:x0+1296+(col-11)*124.0f, ky=y0+row*88.0f;
+        const float kx=x0+col*124.0f, ky=y0+row*72.0f;
         const bool focused=i==s.selected;
-        if(focused){c.roundRect(kx,ky,112,76,22,face);focusRing(c,m,1,kx,ky,112,76,22);}
-        else {c.roundRect(kx,ky,112,76,22,face,18);c.roundRectStroke(kx,ky,112,76,22,1,face,seamAlpha);}
+        if(focused){c.roundRect(kx,ky,112,60,22,face);focusRing(c,m,1,kx,ky,112,60,22);}
+        else {c.roundRect(kx,ky,112,60,22,face,18);c.roundRectStroke(kx,ky,112,60,22,1,face,seamAlpha);}
         const Color ink=focused?faceText:face;
         if(CatalogSearch::keys[i]==' ') {
-            c.line(kx+38,ky+34,kx+38,ky+46,3,ink);c.line(kx+38,ky+46,kx+74,ky+46,3,ink);c.line(kx+74,ky+46,kx+74,ky+34,3,ink);
+            c.line(kx+38,ky+26,kx+38,ky+38,3,ink);c.line(kx+38,ky+38,kx+74,ky+38,3,ink);c.line(kx+74,ky+38,kx+74,ky+26,3,ink);
         } else {
             const char key[2]{CatalogSearch::keys[i],0};
-            labelCenter(c,Face::black,30,kx+56,ky+38,key,ink);
+            labelCenter(c,Face::black,30,kx+56,ky+30,key,ink);
         }
     }
     label(c,Face::semibold,17,x+40,y+h-36,"Searches the full NVIDIA catalog by title. Results open in Store.",muted);

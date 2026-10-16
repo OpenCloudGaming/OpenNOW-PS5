@@ -1,21 +1,32 @@
 #include "catalog_search.hpp"
 #include <cassert>
 #include <cstring>
+#include <initializer_list>
 int main() {
     opennow::CatalogSearch input;
-    input.move(-1,0);assert(input.selected==32);
-    input.move(1,0);assert(input.selected==0);
-    input.move(0,-1);assert(input.selected==39);
-    input.move(0,1);assert(input.selected==31);
-    input.move(0,1);assert(input.selected==34);
-    input.move(0,1);assert(input.selected==37);
-    input.move(0,1);assert(input.selected==39);
-    input.selected=0;input.append();assert(!std::strcmp(input.text,"A"));
-    input.selected=26;input.append();assert(!std::strcmp(input.text,"A_"));
-    input.selected=28;input.append();assert(!std::strcmp(input.text,"A_ "));
-    input.text[0]=0;
-    for(unsigned i=30;i<40;++i){input.selected=i;input.append();}
-    assert(!std::strcmp(input.text,"1234567890"));
+    const char* rows[]={"1234567890","QWERTYUIOP","ASDFGHJKL","ZXCVBNM","_- ."};
+    unsigned index=0;
+    for(unsigned r=0;r<5;++r) {
+        const unsigned length=std::strlen(rows[r]);
+        for(unsigned col=0;col<length;++col,++index) {
+            assert(opennow::CatalogSearch::keys[index]==rows[r][col]);
+            assert(opennow::CatalogSearch::row(index)==r);
+            assert(opennow::CatalogSearch::column(index)==col);
+            input.selected=index;input.move(-1,0);
+            assert(input.selected==index-col+(col?col-1:length-1));
+            input.selected=index;input.move(1,0);
+            assert(input.selected==index-col+(col+1)%length);
+            for(int y:{-1,1}) {
+                const unsigned target=(r+5+y)%5, targetLength=std::strlen(rows[target]);
+                input.selected=index;input.move(0,y);
+                assert(opennow::CatalogSearch::row(input.selected)==target);
+                assert(opennow::CatalogSearch::column(input.selected)==(col<targetLength?col:targetLength-1));
+            }
+        }
+    }
+    assert(index==opennow::CatalogSearch::count);
+    for(unsigned i=0;i<opennow::CatalogSearch::count;++i){input.selected=i;input.append();}
+    assert(!std::strcmp(input.text,"1234567890QWERTYUIOPASDFGHJKLZXCVBNM_- ."));
     input.text[0]=0;input.selected=0;
     for(unsigned i=0;i<200;++i)input.append();
     assert(std::strlen(input.text)==127);

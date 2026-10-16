@@ -334,11 +334,11 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
 
     press(PS5_PAD_BUTTON_TRIANGLE);
     assert(searchInput.open&&section==Section::browse&&current()==Screen::search);
-    press(PS5_PAD_BUTTON_RIGHT);press(PS5_PAD_BUTTON_CROSS);
-    assert(!std::strcmp(searchInput.text,"B"));
+    press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_RIGHT);press(PS5_PAD_BUTTON_CROSS);
+    assert(!std::strcmp(searchInput.text,"W"));
     press(PS5_PAD_BUTTON_SQUARE);assert(!*searchInput.text);
     press(PS5_PAD_BUTTON_CROSS);press(PS5_PAD_BUTTON_OPTIONS);
-    assert(take()==8&&!searchInput.open&&!std::strcmp(pendingSearch,"B")&&browsers[1].target==1);
+    assert(take()==8&&!searchInput.open&&!std::strcmp(pendingSearch,"W")&&browsers[1].target==1);
     press(PS5_PAD_BUTTON_TRIANGLE);
     press(PS5_PAD_BUTTON_CIRCLE);
     assert(!searchInput.open&&command.load()==0&&!http.cancelled);
