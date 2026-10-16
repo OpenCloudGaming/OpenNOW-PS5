@@ -178,11 +178,15 @@ Result command(const Fixture& fixture,wire::Operation operation,const char* titl
 
 void lifecycle(Fixture& fixture) {
     assert(command(fixture,wire::Operation::list).count==0);
+    const mode_t mask=::umask(077);
     Connection first(fixture.paths);upload(first,fixture);const auto created=reply(first);
+    ::umask(mask);
     assert(created.code==Code::created&&!std::strcmp(created.titleId,fixture.titleId));
     assert(first.server.received==uploadSize(fixture)&&first.server.largestRead==wire::chunkSize);fixture.clean();
     for(const auto& spec:wire::files)
         equalFiles(fixture.root/created.titleId/spec.path,fixture.source/spec.path);
+    for(const char* program:{"eboot.bin","sce_module/libc.prx"})
+        assert(fs::status(fixture.root/created.titleId/program).permissions()==(fs::perms::owner_all|fs::perms::group_read|fs::perms::group_exec|fs::perms::others_read|fs::perms::others_exec));
     const auto metadata=fixture.root/created.titleId/"forwarder.json";
     const std::string preserved=R"({"target":"PPSA99082","args":["--gfn-app-id","12345"],"creator":"External manager"})";
     writeFile(metadata,preserved);

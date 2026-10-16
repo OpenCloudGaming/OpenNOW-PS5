@@ -244,15 +244,15 @@ bool contents(int fd,const char* const* allowed,unsigned count) noexcept {
     if(!ok||seen!=(1U<<count)-1){errno=EINVAL;return false;}
     return true;
 }
-struct StagedFile { const char* name; unsigned parent; std::size_t limit; };
+struct StagedFile { const char* name; unsigned parent; std::size_t limit; unsigned mode; };
 constexpr StagedFile stagedFiles[]={
-    {"eboot.bin",0,2*1024*1024},
-    {"forwarder.json",0,16383},
-    {"libc.prx",2,2*1024*1024},
-    {"param.json",1,16383},
-    {"icon0.png",1,2*1024*1024},
-    {"pic0.dds",1,3840*2160+148},
-    {"pic1.dds",1,3840*2160+148}
+    {"eboot.bin",0,2*1024*1024,0755},
+    {"forwarder.json",0,16383,0644},
+    {"libc.prx",2,2*1024*1024,0755},
+    {"param.json",1,16383,0644},
+    {"icon0.png",1,2*1024*1024,0644},
+    {"pic0.dds",1,3840*2160+148,0644},
+    {"pic1.dds",1,3840*2160+148,0644}
 };
 class Stage {
 public:
@@ -336,13 +336,13 @@ bool collisions(const Paths& paths,bool (&occupied)[700],Entry& existing) noexce
     }
     return true;
 }
-bool copyFile(int from,const char* to,std::size_t limit) noexcept {
+bool copyFile(int from,const char* to,std::size_t limit,unsigned mode) noexcept {
     if(!rewindFile(from))return false;
     struct stat info{};
     if(!statFile(from,info)||!S_ISREG(info.st_mode)||info.st_size<=0||static_cast<std::uint64_t>(info.st_size)>limit){errno=EINVAL;return false;}
-    int target=accountFile::open(to,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0644);
+    int target=accountFile::open(to,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,mode);
     if(target<0)return false;
-    unsigned char buffer[16384];std::size_t total=0;bool ok=true;
+    unsigned char buffer[16384];std::size_t total=0;bool ok=accountFile::permissions(target,mode)==0;
     while(total<=limit) {
         const std::size_t remaining=limit-total+1;
         const auto n=accountFile::read(from,buffer,remaining<sizeof(buffer)?remaining:sizeof(buffer));
@@ -362,7 +362,7 @@ bool copyStage(const Stage& source,const char* destination) noexcept {
     const char* directories[]={destination,sys,module};
     for(unsigned i=0;i<7;++i) {
         const auto& spec=stagedFiles[i];
-        if(!files::join(to,directories[spec.parent],spec.name)||!copyFile(source.files[i].get(),to,spec.limit))return false;
+        if(!files::join(to,directories[spec.parent],spec.name)||!copyFile(source.files[i].get(),to,spec.limit,spec.mode))return false;
     }
     return files::syncDirectory(sys)&&files::syncDirectory(module);
 }
