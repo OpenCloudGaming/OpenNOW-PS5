@@ -10,6 +10,9 @@
 #include "demo_renderer.hpp"
 #ifdef OPENNOW_GPU
 #include "stream/native/gpu_presenter.hpp"
+#include "account_file.hpp"
+#include "app_storage.h"
+extern "C" unsigned long long sceKernelGetProcessTime();
 #endif
 #ifndef OPENNOW_HOST_PREVIEW
 #include <sys/event.h>
@@ -20,6 +23,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
@@ -293,6 +297,8 @@ void notify(std::string_view message) noexcept
 
 #ifdef OPENNOW_GPU
 thread_local bool linear_canvas=false;
+#elif defined(OPENNOW_HOST_PREVIEW)
+constexpr bool linear_canvas=true;
 #else
 constexpr bool linear_canvas=false;
 #endif
@@ -339,6 +345,11 @@ class PixelRow
         return *reinterpret_cast<std::uint32_t *>(bytes_ + offset);
     }
 
+    std::uint32_t *linear() const noexcept
+    {
+        return linear_ ? reinterpret_cast<std::uint32_t *>(bytes_) : nullptr;
+    }
+
   private:
     std::uint8_t *bytes_;
     std::uint32_t tile_ = 0;
@@ -371,6 +382,16 @@ void blend_into(std::uint32_t &pixel, Color color, unsigned alpha) noexcept
 
 void fill_span(const PixelRow &row, int begin, int end, Color color, unsigned alpha) noexcept
 {
+    if (std::uint32_t *pixels = row.linear(); pixels && begin < end)
+    {
+        const auto value = static_cast<std::uint32_t>(color);
+        if (alpha >= 255)
+            std::fill(pixels + begin, pixels + end, value);
+        else if (alpha > 0)
+            for (std::uint32_t *pixel = pixels + begin, *last = pixels + end; pixel < last; ++pixel)
+                *pixel = blend(*pixel, value, alpha);
+        return;
+    }
     if (alpha >= 255)
         for (int x = begin; x < end; ++x)
             row[static_cast<unsigned>(x)] = static_cast<std::uint32_t>(color);
@@ -872,6 +893,36 @@ void Canvas::imageRounded(int x, int y, unsigned width, unsigned height,
         const std::uint32_t *source = data + std::size_t(row) * width;
         const float cy = static_cast<float>(row) + 0.5f;
         const bool corner = cy < radius || cy > h - radius;
+        if (std::uint32_t *pixels = target.linear(); pixels && c0 < c1)
+        {
+            std::uint32_t *out = pixels + x;
+            int begin = c0, end = c1;
+            if (corner)
+            {
+                while (begin < c1 && begin + 0.5f < radius)
+                    ++begin;
+                while (end > begin && end - 0.5f > w - radius)
+                    --end;
+            }
+            const auto edge = [&](int from, int to) {
+                for (int column = from; column < to; ++column)
+                {
+                    const float d = round_rect_distance(column + 0.5f, cy, 0, 0, w, h, radius);
+                    if (d >= 0.5f)
+                        continue;
+                    blend_into(out[column], static_cast<Color>(source[column]),
+                               d > -0.5f ? static_cast<unsigned>((0.5f - d) * static_cast<float>(alpha) + 0.5f) : alpha);
+                }
+            };
+            edge(c0, begin);
+            if (alpha >= 255)
+                std::copy(source + begin, source + end, out + begin);
+            else
+                for (int column = begin; column < end; ++column)
+                    out[column] = blend(out[column], source[column], alpha);
+            edge(end, c1);
+            continue;
+        }
         for (int column = c0; column < c1; ++column)
         {
             const float cx = static_cast<float>(column) + 0.5f;
@@ -954,6 +1005,37 @@ void Canvas::imageDoubled(const std::uint32_t *data, unsigned sourceWidth, unsig
         const std::size_t offset = std::size_t((row - y) / 2) * sourceWidth;
         const std::uint32_t *source = data + offset;
         const std::uint32_t *below = under ? under + offset : nullptr;
+        if (std::uint32_t *pixels = target.linear(); pixels && x0 < x1)
+        {
+            std::uint32_t *out = pixels + x;
+            const auto put = [&](int at) {
+                const std::uint32_t over = source[at / 2];
+                out[at] = below ? blend(below[at / 2], over, alpha) : alpha >= 255 ? over : blend(out[at], over, alpha);
+            };
+            int at = x0 - x;
+            const int last = x1 - x;
+            if (at < last && (at & 1))
+                put(at++);
+            const auto pairs = [&](auto value) {
+                const std::uint32_t *from = source + at / 2, *under_from = below ? below + at / 2 : nullptr;
+                std::uint32_t *to = out + at;
+                const int count = (last - at) / 2;
+                for (int i = 0; i < count; ++i)
+                {
+                    const std::uint64_t pixel = value(from[i], under_from ? under_from[i] : 0);
+                    const std::uint64_t pair = pixel | (pixel << 32);
+                    std::memcpy(to + 2 * i, &pair, sizeof(pair));
+                }
+                at += 2 * count;
+            };
+            if (below)
+                pairs([&](std::uint32_t over, std::uint32_t base) { return blend(base, over, alpha); });
+            else if (alpha >= 255)
+                pairs([](std::uint32_t over, std::uint32_t) { return over; });
+            for (; at < last; ++at)
+                put(at);
+            continue;
+        }
         for (int column = x0; column < x1;)
         {
             const int sourceX = (column - x) / 2;
@@ -988,15 +1070,29 @@ void Canvas::scrim(float x, float y, float w, float h, float radius, float from,
             continue;
         const PixelRow target(pixels_, static_cast<unsigned>(row));
         const bool corner = py > y + h - radius;
-        for (int column = x0; column < x1; ++column)
+        int begin = x0, end = x1;
+        if (!corner)
         {
-            const float px = column + 0.5f;
-            const float d = corner || px < x + 1 || px > x + w - 1 ? round_rect_distance(px, py, x, y, w, h, radius) : -1.0f;
-            if (d >= 0.5f)
-                continue;
-            blend_into(target[static_cast<unsigned>(column)], color,
-                       d <= -0.5f ? shade : static_cast<unsigned>((0.5f - d) * static_cast<float>(shade) + 0.5f));
+            while (begin < x1 && begin + 0.5f < x + 1)
+                ++begin;
+            while (end > begin && end - 0.5f > x + w - 1)
+                --end;
         }
+        else
+            begin = end = x1;
+        const auto edge = [&](int from, int to) {
+            for (int column = from; column < to; ++column)
+            {
+                const float d = round_rect_distance(column + 0.5f, py, x, y, w, h, radius);
+                if (d >= 0.5f)
+                    continue;
+                blend_into(target[static_cast<unsigned>(column)], color,
+                           d <= -0.5f ? shade : static_cast<unsigned>((0.5f - d) * static_cast<float>(shade) + 0.5f));
+            }
+        };
+        edge(x0, begin);
+        fill_span(target, begin, end, color, shade);
+        edge(end, x1);
     }
 }
 
@@ -1104,6 +1200,73 @@ void runFrames(DrawScene draw, unsigned count, PreviewStep step, const char *dir
 }
 #endif
 
+#ifdef OPENNOW_GPU
+namespace
+{
+// Summarizes interface frame cost in ui-perf.log: CPU raster, GPU upload plus
+// swap, and the interval between consecutive presented frames.
+class FramePerf
+{
+  public:
+    void frame(std::uint64_t begin, std::uint64_t drawn, std::uint64_t presented) noexcept
+    {
+        const auto interval = previous_ && begin - previous_ < 100000 ? presented - previous_ : 0;
+        previous_ = presented;
+        raster_[count_] = static_cast<std::uint32_t>(drawn - begin);
+        present_[count_] = static_cast<std::uint32_t>(presented - drawn);
+        interval_[count_] = static_cast<std::uint32_t>(interval);
+        if (++count_ == size)
+            flush();
+    }
+    void idle() noexcept { previous_ = 0; }
+
+  private:
+    static constexpr unsigned size = 240;
+    struct Stats
+    {
+        float p50, p95, max;
+    };
+    static Stats stats(std::uint32_t *values, unsigned count) noexcept
+    {
+        if (!count)
+            return {};
+        std::sort(values, values + count);
+        return {values[count / 2] / 1000.0f, values[count * 95 / 100] / 1000.0f, values[count - 1] / 1000.0f};
+    }
+    void flush() noexcept
+    {
+        std::uint32_t intervals[size];
+        unsigned measured = 0, late = 0;
+        for (unsigned i = 0; i < size; ++i)
+            if (interval_[i])
+            {
+                intervals[measured++] = interval_[i];
+                late += interval_[i] > 17500;
+            }
+        const Stats raster = stats(raster_, size), present = stats(present_, size), interval = stats(intervals, measured);
+        count_ = 0;
+        if (lines_ >= 200)
+            return;
+        ++lines_;
+        char line[256];
+        const int length = std::snprintf(line, sizeof(line),
+            "frames=%u raster p50=%.2f p95=%.2f max=%.2f present p50=%.2f p95=%.2f max=%.2f "
+            "interval n=%u p50=%.2f p95=%.2f max=%.2f over17.5=%u\n",
+            size, raster.p50, raster.p95, raster.max, present.p50, present.p95, present.max, measured, interval.p50,
+            interval.p95, interval.max, late);
+        const int fd = opennow::accountFile::open(opennow_storage_file("ui-perf.log"), O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd < 0)
+            return;
+        (void)opennow::accountFile::write(fd, line, static_cast<std::size_t>(std::max(length, 0)));
+        (void)opennow::accountFile::close(fd);
+    }
+    std::uint32_t raster_[size]{}, present_[size]{}, interval_[size]{};
+    unsigned count_ = 0, lines_ = 0;
+    std::uint64_t previous_ = 0;
+};
+} // namespace
+#endif
+
 void run(DrawScene draw, std::string_view ready_message) noexcept
 {
 #ifdef OPENNOW_HOST_PREVIEW
@@ -1121,10 +1284,14 @@ void run(DrawScene draw, std::string_view ready_message) noexcept
         if(!pixels)halt("OpenNOW: UI allocation failed");
         Canvas canvas(pixels);
         (void)sceSystemServiceHideSplashScreen();
+        static FramePerf perf;
         while(!stopRequested.load()) {
+            const auto begin=sceKernelGetProcessTime();
             if(draw(canvas)) {
+                const auto drawn=sceKernelGetProcessTime();
                 if(!opennow::gpu::present(pixels))halt("OpenNOW: GPU presentation failed");
-            } else sceKernelUsleep(1000);
+                perf.frame(begin,drawn,sceKernelGetProcessTime());
+            } else {perf.idle();sceKernelUsleep(1000);}
         }
         std::free(pixels);
         return;

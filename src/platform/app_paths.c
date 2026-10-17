@@ -8,7 +8,7 @@ static const char storage_root[] = OPENNOW_SANDBOX_STORAGE_ROOT;
 
 #define APP_FILES(X) X("assets/cacert.pem") X("assets/forwarder-template") X("opennow-tile-installer.elf")
 #define STORAGE_FILES(X) X("account.bin") X("settings.bin") X("session.bin") X("artwork") \
-    X("network.log") X("media.log") X("video-sps.bin") X("live-video.status") X("tile-stage")
+    X("network.log") X("media.log") X("ui-perf.log") X("video-sps.bin") X("live-video.status") X("tile-stage")
 #define NAME(n) n,
 #define APP_PATH(n) OPENNOW_SANDBOX_APP_ROOT "/" n,
 #define STORAGE_PATH(n) OPENNOW_SANDBOX_STORAGE_ROOT "/" n,
