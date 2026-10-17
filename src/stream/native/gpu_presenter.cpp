@@ -35,7 +35,7 @@ namespace opennow::gpu {
 namespace {
 EGLDisplay display=EGL_NO_DISPLAY;EGLContext context=EGL_NO_CONTEXT;EGLSurface window=EGL_NO_SURFACE;
 GLuint program=0,vao=0,uiTexture=0;unsigned width=3840,height=2160,refresh=0;
-GLint uiSamplerUniform=-1,uiModeUniform=-1;bool uiAllocated=false;
+bool uiAllocated=false;
 bool ready=false,hdrScanout=false,videoDrawn=false;
 GLuint retainedFbo=0,retainedTexture=0,overlayTexture=0;
 bool overlayActive=false,overlayDirty=false,releasing=false,retainedValid=false,retainedHdr=false,retainFailed=false;
@@ -201,7 +201,6 @@ bool initializeRuntime() noexcept {
  const auto vs=shader(GL_VERTEX_SHADER,vertex),fs=shader(GL_FRAGMENT_SHADER,fragment);if(!vs||!fs)return false;
  program=glCreateProgram();glAttachShader(program,vs);glAttachShader(program,fs);glLinkProgram(program);glDeleteShader(vs);glDeleteShader(fs);GLint ok=0;glGetProgramiv(program,GL_LINK_STATUS,&ok);if(!ok)return false;
  glGenVertexArrays(1,&vao);glBindVertexArray(vao);glGenTextures(1,&uiTexture);uiAllocated=false;
- uiSamplerUniform=glGetUniformLocation(program,"yTex");uiModeUniform=glGetUniformLocation(program,"mode");
  imageTarget=reinterpret_cast<ImageTarget>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));if(!imageTarget)return false;
  glViewport(0,0,width,height);ready=true;glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);swap();
  if(load==0){
@@ -345,7 +344,7 @@ void drawInterface(const std::uint32_t* pixels) noexcept {
   glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1920,1080,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
   uiAllocated=true;
  } else glTexSubImage2D(GL_TEXTURE_2D,0,0,0,1920,1080,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
- glUniform1i(uiSamplerUniform,0);glUniform1i(uiModeUniform,0);glDrawArrays(GL_TRIANGLES,0,3);
+ glUniform1i(glGetUniformLocation(program,"yTex"),0);glUniform1i(glGetUniformLocation(program,"mode"),0);glDrawArrays(GL_TRIANGLES,0,3);
 }
 bool swap() noexcept{return ready&&eglSwapBuffers(display,window)==EGL_TRUE;}
 const char* outputLabel() noexcept{return label;}
