@@ -55,6 +55,7 @@ void glUniform2f(GLint location,GLfloat x,GLfloat y) {assert(location==1);cropX=
 void glDrawArrays(GLenum mode,GLint first,GLsizei count) {assert(mode==GL_TRIANGLES&&first==0&&count==3);++draws;drawn.push_back({shaderMode,boundFbo});}
 GLenum glGetError() {return GL_NO_ERROR;}
 void glTexImage2D(GLenum,GLint,GLint,GLsizei,GLsizei,GLint,GLenum,GLenum,const void* data) {if(data)++uploads;}
+void glTexSubImage2D(GLenum,GLint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const void* data) {if(data)++uploads;}
 }
 
 using Draws=std::vector<std::pair<int,GLuint>>;
