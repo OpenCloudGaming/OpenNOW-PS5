@@ -48,7 +48,7 @@ public:
     void launchEntry(CatalogSource source,unsigned index,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels=2) noexcept;
     void launchId(const char* appId,const char* store,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels=2) noexcept;
     void dismissLaunchError() noexcept;
-    RecoveryResult recover(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels=2,const Session* retained=nullptr,bool allowRetainedResume=true) noexcept;
+    RecoveryResult recover(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels=2,const Session* retained=nullptr,bool allowRetainedResume=true,const Game* requested=nullptr) noexcept;
     void tick(const char* jwt,const char* device,std::uint64_t now) noexcept;
     bool stop(const char* jwt,const char* device) noexcept;
     void reset() noexcept;

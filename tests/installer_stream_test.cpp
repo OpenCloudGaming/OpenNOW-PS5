@@ -44,7 +44,7 @@ struct Fixture {
     Game game;
     char titleId[10]{};
     Fixture() {
-        char temporary[]="/tmp/opennow-installer-stream-XXXXXX";assert(mkdtemp(temporary));base=temporary;
+        char temporary[]="/tmp/opennow-installer-stream-XXXXXX";assert(mkdtemp(temporary));base=fs::canonical(temporary);
         root=base/"homebrew";source=base/"source";collision=base/"appmeta";
         fs::create_directory(root);fs::create_directory(collision);
         fs::create_directories(source/"sce_sys");fs::create_directory(source/"sce_module");

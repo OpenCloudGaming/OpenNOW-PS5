@@ -100,9 +100,10 @@ int main() {
     bad=input;std::memset(bad.title,'x',sizeof(bad.title));assert(!paramJson(bad,"PPSA99200",param,sizeof(param)));
 
     char temporary[]="/tmp/opennow-forwarder-XXXXXX";assert(mkdtemp(temporary));
-    const fs::path root=fs::path(temporary)/"homebrew",inventory=fs::path(temporary)/"appmeta";
+    const auto base=fs::canonical(temporary);
+    const fs::path root=base/"homebrew",inventory=base/"appmeta";
     fs::create_directories(root);fs::create_directory(inventory);
-    const auto rootText=root.string(),inventoryText=inventory.string(),stageText=(fs::path(temporary)/"tile-stage").string();
+    const auto rootText=root.string(),inventoryText=inventory.string(),stageText=(base/"tile-stage").string();
     const char* collisions[]={inventoryText.c_str()};
     Options options;options.paths.root=rootText.c_str();options.paths.collisionRoots=collisions;options.paths.collisionRootCount=1;
     options.paths.stageRoot=stageText.c_str();
@@ -128,7 +129,7 @@ int main() {
     assert(create(input,options).code==Code::alreadyExists);
     fs::create_directory(root/"PPSA99201");write(root/"PPSA99201"/"foreign","untouched");
     assert(remove("PPSA99201",options.paths).code==Code::conflict&&fs::exists(root/"PPSA99201"/"foreign"));
-    const auto secret=fs::path(temporary)/"secret";write(secret,"preserve");
+    const auto secret=base/"secret";write(secret,"preserve");
     fs::create_symlink(secret,tile/"linked");
     assert(remove(first.titleId,options.paths).code==Code::removed&&read(secret)=="preserve");
     assert(remove(first.titleId,options.paths).code==Code::notFound);
@@ -153,7 +154,7 @@ int main() {
     assert(create(input,options,job).code==Code::templateError);noStaging(root);assert(fs::is_empty(stageText));
     bool kept=false;for(const auto& entry:fs::directory_iterator(root))if(fs::exists(entry.path()/"foreign"))kept=true;assert(kept);
     state.corruptStage=false;
-    const auto corruptTemplate=(fs::path(temporary)/"bad-template").string();fs::create_directory(corruptTemplate);
+    const auto corruptTemplate=(base/"bad-template").string();fs::create_directory(corruptTemplate);
     write(fs::path(corruptTemplate)/"eboot.bin","not the standard forwarder");
     options.paths.templateRoot=corruptTemplate.c_str();assert(create(input,options).code==Code::templateError);options.paths.templateRoot=sourceTemplate.c_str();
 
@@ -168,6 +169,6 @@ int main() {
     assert(!std::strcmp(opennow_app_file("assets/cacert.pem"),"/app0/assets/cacert.pem"));
     assert(!*opennow_storage_file("unknown.bin"));
     assert(fs::is_empty(stageText));
-    fs::remove_all(temporary);
+    fs::remove_all(base);
     std::puts("forwarder tests passed: standard metadata, title allocation, atomic publication, cancellation and safe removal");
 }

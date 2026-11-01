@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "tile_store.hpp"
+#include "tile_manifest.hpp"
 #include <array>
 #include <cerrno>
 #include <climits>
@@ -20,16 +21,8 @@ struct Request {
     std::uint32_t id=0;
     char titleId[10]{};
 };
-struct FileSpec { const char* path; std::uint64_t limit; };
-inline constexpr FileSpec files[]={
-    {"eboot.bin",2*1024*1024},
-    {"sce_module/libc.prx",2*1024*1024},
-    {"sce_sys/param.json",16383},
-    {"sce_sys/icon0.png",2*1024*1024},
-    {"sce_sys/pic0.dds",3840*2160+148},
-    {"sce_sys/pic1.dds",3840*2160+148},
-    {"forwarder.json",16383}
-};
+using FileSpec=tileManifest::FileSpec;
+inline constexpr const auto& files=tileManifest::files;
 struct File {
     std::uint64_t length=0;
     char path[40]{};

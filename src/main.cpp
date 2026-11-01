@@ -319,7 +319,7 @@ void* worker(void*) {
     int regionSaveError=0;
     unsigned regionAcknowledged=0;
     auto launchSettings=store.defaults;
-    const auto recoverSession=[&](std::uint64_t now,bool savedOnly=false) {
+    const auto recoverSession=[&](std::uint64_t now,bool savedOnly=false,const opennow::Game* requested=nullptr) {
         profileSaveFailed=false;
         opennow::Session retainedSession;
         const bool retained=opennow::sessionFile::load(OPENNOW_SESSION_PATH,login.userId(),retainedProfile)==opennow::sessionFile::Status::loaded;
@@ -331,7 +331,7 @@ void* worker(void*) {
             retainedSession.settings=retainedProfile.settings;retainedSession.audioChannels=retainedProfile.audioChannels;
         }
         const auto result=cloud.recover(login.cloudToken(),id,now,store.defaults,audioCapacity,
-            retained?&retainedSession:nullptr,!retained||retainedProfile.resumeAllowed);
+            retained?&retainedSession:nullptr,!retained||retainedProfile.resumeAllowed,requested);
         resumeAllowed=!retained||std::strcmp(cloud.session().id,retainedSession.id)||retainedProfile.resumeAllowed;
         if(retained&&result==opennow::RecoveryResult::none){opennow::sessionFile::remove(OPENNOW_SESSION_PATH);retainedProfile={};}
         if(*cloud.session().id) {
@@ -420,7 +420,19 @@ void* worker(void*) {
                 if(!skipCatalogRecovery)recoverSession(now/1000000,true);
                 skipCatalogRecovery=false;
             }
-            if(action==5&&!*cloud.session().id&&cloud.recoveryRequired())recoverSession(now/1000000);
+            const auto chosen=action==5?store.launch(request.hasSettings,request.settings,opennow::gpu::settingsAvailable):std::optional<opennow::StreamSettings>{};
+            if(action==5&&!*cloud.session().id&&request.index>=0&&!chosen) {
+                streamFailure[0]=0;
+                const auto& list=request.source==1?cloud.library():cloud.view();
+                rejectedGame=static_cast<unsigned>(request.index)<list.count?list.games[request.index]:opennow::Game{};
+                std::snprintf(rejected,sizeof(rejected),"%s",opennow::ui::settingsProblem(request.settings,opennow::gpu::settingsAvailable(request.settings)));
+                pthread_mutex_lock(&viewMutex);publishedLaunch=request.settings;pthread_mutex_unlock(&viewMutex);
+            }
+            if(action==5&&chosen&&!*cloud.session().id&&cloud.recoveryRequired()&&request.index>=0) {
+                rejected[0]=0;
+                const auto& entries=request.source==1?cloud.library():cloud.view();
+                if(static_cast<unsigned>(request.index)<entries.count)recoverSession(now/1000000,false,&entries.games[request.index]);
+            }
             const bool idle=!*cloud.session().id;
             if(action==20) {
                 regionAcknowledged=request.regionRequest;
@@ -431,15 +443,8 @@ void* worker(void*) {
                 } else regionSaveError=EBUSY;
             }
             if(action==21&&idle)cloud.refreshRegions(login.cloudToken(),id);
-            if(action==5&&idle&&!cloud.recoveryRequired()&&request.index>=0) {
-                const auto chosen=store.launch(request.hasSettings,request.settings,opennow::gpu::settingsAvailable);
+            if(action==5&&chosen&&idle&&!cloud.recoveryRequired()&&request.index>=0) {
                 streamFailure[0]=0;rejected[0]=0;
-                if(!chosen) {
-                    const auto& list=request.source==1?cloud.library():cloud.view();
-                    rejectedGame=static_cast<unsigned>(request.index)<list.count?list.games[request.index]:opennow::Game{};
-                    std::snprintf(rejected,sizeof(rejected),"%s",opennow::ui::settingsProblem(request.settings,opennow::gpu::settingsAvailable(request.settings)));
-                    pthread_mutex_lock(&viewMutex);publishedLaunch=request.settings;pthread_mutex_unlock(&viewMutex);
-                } else {
                     resumeAllowed=true;profileSaveFailed=false;
                     launchSettings=*chosen;
                     pthread_mutex_lock(&viewMutex);
@@ -451,7 +456,6 @@ void* worker(void*) {
                     cloud.launchEntry(request.source==1?CatalogSource::library:CatalogSource::browse,static_cast<unsigned>(request.index),
                                       login.cloudToken(),id,now/1000000,launchSettings,audioChannels);
                     streamAttempted=false;
-                }
             }
             if((action==6||action==7)&&idle){streamFailure[0]=0;cloud.loadPage(CatalogSource::browse,request.index>0?static_cast<unsigned>(request.index):0,login.cloudToken(),id,request.direction);}
             if(action==12&&idle)cloud.loadPage(CatalogSource::library,request.index>0?static_cast<unsigned>(request.index):0,login.cloudToken(),id,request.direction);

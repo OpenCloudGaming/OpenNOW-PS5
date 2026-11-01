@@ -88,8 +88,9 @@ corrected adapter was exercised on the console through scans, pinned-template
 copying, metadata rewrite, atomic directory rename, and cleanup. The complete
 shared store also created and removed a throwaway console title successfully.
 
-Foreign collision roots are best-effort. Observed folder names still reserve
-their IDs; readable JSON adds embedded IDs. Unreadable roots and unreadable or
-malformed foreign metadata cannot block installation. The homebrew destination
-keeps its stricter enumeration and metadata checks. Disconnected or unreadable
-storage cannot provide complete collision coverage.
+Observed folder names reserve their IDs; readable JSON adds embedded IDs.
+Missing optional collision roots are skipped, and malformed foreign JSON is
+ignored. Directory-enumeration and metadata I/O failures, including `EACCES`
+and `EIO`, abort installation before a title is published because collision
+coverage is incomplete. The homebrew destination also retains its strict
+metadata checks.
