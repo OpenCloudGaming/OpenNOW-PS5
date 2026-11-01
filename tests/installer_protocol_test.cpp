@@ -384,10 +384,10 @@ int sceNetRecv(int fd,void* bytes,std::size_t size,int flags) {
     test::replyOffset+=n;return static_cast<int>(n);
 }
 unsigned long long sceKernelGetProcessTime() {return test::clock.load();}
-int seteuid(uid_t) noexcept {++test::credentialWrites;return -1;}
-int setuid(uid_t) noexcept {++test::credentialWrites;return -1;}
-int setgid(gid_t) noexcept {++test::credentialWrites;return -1;}
-int setegid(gid_t) noexcept {++test::credentialWrites;return -1;}
+int seteuid(uid_t) noexcept(noexcept(::seteuid(uid_t{}))) {++test::credentialWrites;return -1;}
+int setuid(uid_t) noexcept(noexcept(::setuid(uid_t{}))) {++test::credentialWrites;return -1;}
+int setgid(gid_t) noexcept(noexcept(::setgid(gid_t{}))) {++test::credentialWrites;return -1;}
+int setegid(gid_t) noexcept(noexcept(::setegid(gid_t{}))) {++test::credentialWrites;return -1;}
 }
 
 int main() {

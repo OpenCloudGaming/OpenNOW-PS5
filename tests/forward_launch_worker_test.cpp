@@ -16,7 +16,9 @@ std::string testRoot;
 unsigned scenario=0,lookups=0,catalogs=0,launches=0,networkTests=0,sessionLists=0,deletes=0;
 unsigned removalAttempts=0,signOutStage=0,recoveryInfos=0;
 unsigned regionStage=0;
+unsigned launchStage=0;
 bool manualRegionChecked=false;
+bool launchRecoveryScenario() {return scenario==11||scenario==12;}
 std::atomic_uint refreshes{0};
 std::uint64_t clockUs=1000000;
 std::chrono::steady_clock::time_point deadline;
@@ -110,7 +112,22 @@ int sceKernelUsleep(unsigned) {
         assert(saved.settings.bitrate_kbps==20000&&saved.artworkCache);
         regionStage=2;command.store(10);
     }
-    if(scenario>=3&&scenario!=10&&catalogs==2)command.store(10);
+    if(launchRecoveryScenario()&&catalogs==2&&launchStage==0){launchStage=1;submit(5,{0,0});}
+    else if(launchRecoveryScenario()&&launchStage==1&&publishedCloud.launchError) {
+        launchStage=2;escaped=true;Request retry{scenario==12?0:1,0};
+        if(scenario==12){retry.hasSettings=true;retry.settings.width=1601;}
+        submit(5,retry);
+    }
+    else if(scenario==11&&launchStage==2&&sessionLists==3) {
+        assert(publishedCloud.sessionConflict&&!publishedSession&&publishedCloud.launchError);
+        assert(!std::strcmp(publishedCloud.current.id,"43")&&launches==1&&!deletes);
+        launchStage=3;command.store(10);
+    }
+    else if(scenario==12&&launchStage==2&&publishedLaunch.width==1601) {
+        assert(publishedCloud.launchError&&!publishedSession&&launches==1&&!sessionLists&&!deletes);
+        launchStage=3;command.store(10);
+    }
+    if(scenario>=3&&scenario!=10&&!launchRecoveryScenario()&&catalogs==2)command.store(10);
     return 0;
 }
 }
@@ -155,16 +172,19 @@ Response Http::request(void*,const char* method,const char* url,const char* body
             if(scenario==4)return reply(R"({"data":{"apps":{"items":[]}}})");
             return reply(R"({"data":{"apps":{"items":[{"title":"Fixture","gfn":{"playabilityState":"PLAYABLE"},"variants":[{"id":"42","appStore":"XBOX","gfn":{"status":"AVAILABLE","library":{"status":"MANUAL"}}}]}]}}})");
         }
-        ++catalogs;assert((escaped||scenario==6||scenario==10)&&!forwardLaunchMode.load());
+        ++catalogs;assert((escaped||scenario==6||scenario==10||launchRecoveryScenario())&&!forwardLaunchMode.load());
+        if(launchRecoveryScenario())return reply(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[{"title":"Game A","variants":[{"id":"42","appStore":"XBOX","gfn":{"library":{"status":"MANUAL"}}}]},{"title":"Game B","variants":[{"id":"43","appStore":"XBOX","gfn":{"library":{"status":"MANUAL"}}}]}]}}})");
         return reply(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[]}}})");
     }
     if(std::string(url)==std::string(allocationOrigin())+"v2/nettestsession") {
-        assert(!std::strcmp(method,"POST")&&lookups==1&&!catalogs&&!launches);
+        assert(!std::strcmp(method,"POST")&&!launches&&((launchRecoveryScenario()&&catalogs==2&&!lookups)||(lookups==1&&!catalogs)));
         ++networkTests;
         return reply(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"fixture-net"}})");
     }
     if(!std::strcmp(method,"GET")&&std::string(url).ends_with("/v2/session")) {
+        assert(scenario!=12&&"Invalid launch settings must be rejected before recovery requests");
         assert((escaped||scenario==6)&&(scenario==9||!forwardLaunchMode.load()));++sessionLists;
+        if(scenario==11)return reply(R"({"requestStatus":{"statusCode":1},"sessions":[{"sessionId":"fixture-existing","status":2,"sessionRequestData":{"appId":42}}]})");
         if(scenario==5&&!std::strcmp(url,"https://test.geforcenow.com/v2/session")) {
             static std::string response=std::string(R"({"requestStatus":{"statusCode":1},"sessions":[)")+existingSeat+"]}";
             return reply(response.c_str());
@@ -176,7 +196,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         return reply(response.c_str());
     }
     if(!std::strcmp(method,"POST")&&std::string(url)==std::string(allocationOrigin())+"v2/session?keyboardLayout=en-US_qwerty&languageCode=en_US") {
-        ++launches;assert(lookups==1&&!catalogs);
+        ++launches;assert((launchRecoveryScenario()&&catalogs==2&&!lookups)||(lookups==1&&!catalogs));
         auto* root=cJSON_Parse(body);assert(root);
         const auto* request=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
         assert(cJSON_GetObjectItemCaseSensitive(request,"appId")->valueint==42);
@@ -184,7 +204,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         const auto* features=cJSON_GetObjectItemCaseSensitive(request,"requestedStreamingFeatures");
         assert(cJSON_GetObjectItemCaseSensitive(features,"maxBitrateKbps")->valueint==20000);cJSON_Delete(root);
         if(scenario==5)return reply(R"({"requestStatus":{"statusCode":11},"otherUserSessions":[{"sessionId":"fixture-existing","status":2,"sessionRequestData":{"appId":43}}]})",403);
-        if(scenario==9)return reply("{}",500);
+        if(scenario==9||launchRecoveryScenario())return reply("{}",500);
         return reply(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-new","status":0}})");
     }
     assert(!std::strcmp(method,"DELETE")&&std::string(url)==std::string(allocationOrigin())+"v2/session/fixture-new");
@@ -208,7 +228,7 @@ static void runScenario(unsigned value) {
     deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
     const char* args[]={"--gfn-app-id","42","--store","XBOX"};
     launchArgs=opennow::forwarder::parseLaunchArgs(4,args);forwardLaunchMode.store(true);
-    if(scenario==6||scenario==10){launchArgs={};forwardLaunchMode.store(false);}
+    if(scenario==6||scenario==10||launchRecoveryScenario()){launchArgs={};forwardLaunchMode.store(false);}
     worker(nullptr);assert(stopped);
     if(scenario<=2)assert(launches==1&&lookups==1&&networkTests==1&&!catalogs&&!sessionLists&&deletes==1&&publishedLaunch==settings);
     if(scenario==1)assert(refreshes==3);
@@ -221,12 +241,14 @@ static void runScenario(unsigned value) {
     if(scenario==8)assert(signOutStage==6&&deletes==1&&removalAttempts==4);
     if(scenario==9)assert(launches==1&&lookups==1&&networkTests==1&&sessionLists==3&&recoveryInfos==1&&!deletes);
     if(scenario==10)assert(regionStage==2&&manualRegionChecked&&catalogs==2&&!lookups&&!launches&&!networkTests&&!sessionLists&&!deletes);
+    if(scenario==11)assert(launchStage==3&&launches==1&&catalogs==2&&!lookups&&!deletes&&!publishedSession);
+    if(scenario==12)assert(launchStage==3&&launches==1&&catalogs==2&&!lookups&&!sessionLists&&!deletes&&!publishedSession);
     assert(std::filesystem::exists(testRoot+"/account.bin")== (scenario!=7&&scenario!=8));
     assert(!std::filesystem::exists(testRoot+"/session.bin"));
     std::filesystem::remove_all(testRoot);
 }
 int main() {
-    for(unsigned scenario=0;scenario<11;++scenario) {
+    for(unsigned scenario=0;scenario<13;++scenario) {
         const pid_t child=fork();assert(child>=0);
         if(!child){runScenario(scenario);std::exit(0);}
         int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);

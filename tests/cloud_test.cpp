@@ -151,6 +151,21 @@ static void acceptedProfileTests() {
  }
 }
 static void recoveryTests() {
+ {
+  Mock mock;mock.created="{}";mock.createStatus=500;
+  const auto seat=existingSeat(),listed=remoteList(seat),lookup=envelope(seat);
+  mock.remote=listed.c_str();mock.lookup=lookup.c_str();Cloud client(request,&mock,trust);
+  client.load("fixture-jwt","fixture-device");client.launch("fixture-jwt","fixture-device",1);
+  assert(client.recoveryRequired()&&!client.view().sessionConflict&&mock.posts==1);
+  client.dismissLaunchError();
+  const Game other=client.view().games[1];
+  assert(client.recover("fixture-jwt","fixture-device",2,StreamSettings{},2,nullptr,true,&other)==RecoveryResult::conflict);
+  assert(!mock.puts&&!mock.deletes&&mock.posts==1&&!*client.session().id&&!std::strcmp(client.view().current.id,"43"));
+  const Game original=client.view().games[0];
+  assert(client.recover("fixture-jwt","fixture-device",3,StreamSettings{},2,nullptr,true,&original)==RecoveryResult::pending);
+  assert(mock.puts==1&&!mock.deletes&&mock.posts==1);
+  assert(client.stop("fixture-jwt","fixture-device"));
+ }
  for(int status:{1,2,3,4,5,6}) {
   Mock mock;const auto seat=existingSeat(status),listed=remoteList(seat),lookup=envelope(seat);
   mock.remote=listed.c_str();mock.lookup=lookup.c_str();Cloud client(request,&mock,trust);

@@ -82,7 +82,7 @@ int main() {
     assert(!store::verifyTemplate("/nonexistent/template"));
 
     char temporary[]="/tmp/opennow-tile-store-XXXXXX";assert(mkdtemp(temporary));
-    const fs::path base=temporary,root=base/"homebrew",collision=base/"appmeta",source=base/"source";
+    const fs::path base=fs::canonical(temporary),root=base/"homebrew",collision=base/"appmeta",source=base/"source";
     fs::create_directory(root);fs::create_directory(collision);stage(source,input);
     const auto rootText=root.string(),collisionText=collision.string();
     const char* collisions[]={collisionText.c_str()};
@@ -170,10 +170,25 @@ int main() {
     const auto deniedText=denied.string();const char* deniedRoots[]={deniedText.c_str()};
     Paths deniedPaths=paths;deniedPaths.collisionRoots=deniedRoots;
     fs::permissions(denied,fs::perms::none);
-    const auto ignored=store::install(source.c_str(),deniedPaths);
+    const auto deniedScan=store::install(source.c_str(),deniedPaths);
     fs::permissions(denied,fs::perms::owner_all);
-    assert(ignored.code==Code::created&&!std::strcmp(ignored.titleId,id));
-    assert(store::remove(ignored.titleId,paths).ok());fs::remove(denied);
+    if(geteuid()==0){assert(deniedScan.code==Code::created);assert(store::remove(deniedScan.titleId,paths).ok());}
+    else assert(deniedScan.code==Code::ioError&&deniedScan.error==EACCES&&!fs::exists(root/id));
+    fs::remove(denied);
+    // An absent optional inventory is different from one that could not be read.
+    const auto absentScan=store::install(source.c_str(),deniedPaths);
+    assert(absentScan.code==Code::created);assert(store::remove(absentScan.titleId,paths).ok());
+    const auto blocked=collision/"metadata-blocked/sce_sys/param.json";
+    fs::create_directories(blocked.parent_path());
+    assert(store::paramJson(input,id,body,sizeof(body)));write(blocked,body);
+    fs::permissions(blocked,fs::perms::none);
+    const auto blockedScan=store::install(source.c_str(),paths);
+    fs::permissions(blocked,fs::perms::owner_read|fs::perms::owner_write);
+    if(geteuid()==0){assert(blockedScan.code==Code::created&&std::strcmp(blockedScan.titleId,id));assert(store::remove(blockedScan.titleId,paths).ok());}
+    else assert(blockedScan.code==Code::ioError&&blockedScan.error==EACCES&&!fs::exists(root/id));
+    const auto readableScan=store::install(source.c_str(),paths);
+    assert(readableScan.code==Code::created&&std::strcmp(readableScan.titleId,id));
+    assert(store::remove(readableScan.titleId,paths).ok());fs::remove_all(collision/"metadata-blocked");
     fs::create_directories(root/id/"sce_sys");write(root/id/"forwarder.json",goodMetadata);
     write(root/id/"sce_sys/param.json","{damaged own metadata");
     const auto strict=store::install(source.c_str(),paths);

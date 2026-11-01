@@ -574,9 +574,13 @@ void Cloud::remoteSeat(const cJSON* session,const char* base) noexcept {
     int value;if(integer(obj(obj(session,"sessionRequestData"),"appId"),value)&&value>0)std::snprintf(remote_.appId,sizeof(remote_.appId),"%d",value);
     char control[sizeof(remote_.control)];if(controlOrigin(session,control,sizeof(control)))copy(remote_.control,control);
 }
-RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels,const Session* retained,bool allowRetainedResume) noexcept {
+RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels,const Session* retained,bool allowRetainedResume,const Game* requested) noexcept {
     currentNow_=now;recoveryBlocked_=true;
     const auto failed=[&](const char* message){failLaunch(message);return RecoveryResult::failed;};
+    if(requested) {
+        int expected;if(!appId(requested->id,expected))return failed("Requested game has an invalid launch ID");
+        view_.current=*requested;
+    }
     if(validateSettings(settings)!=SettingsError::none||(audioChannels!=2&&audioChannels!=6&&audioChannels!=8))return failed("Invalid recovery stream settings");
     const std::uint64_t began=monotonicMs();
     if(!began)return failed("Could not start the bounded session recovery check");
@@ -584,6 +588,7 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
     // the next allocation. A missing manual region must not strand that session.
     if(!connect(jwt,device,view_))return RecoveryResult::failed;
     const bool conflict=view_.sessionConflict;
+    const bool matchRequested=requested||conflict;
     if(!conflict||now>=conflictUntil_||!remoteCount_) {
         remote_={};remoteCount_=0;secureErase(remoteIds_,sizeof(remoteIds_));
         char regions[32][512]{};unsigned count=1;copy(regions[0],base_);bool incomplete=false;
@@ -618,7 +623,7 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
         clearSession();recoveryBlocked_=false;view_.launchError=view_.sessionConflict=false;
         view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");return RecoveryResult::none;
     }
-    if(remoteCount_!=1||(conflict&&*view_.current.id&&std::strcmp(view_.current.id,remote_.appId))) {
+    if(remoteCount_!=1||(matchRequested&&*view_.current.id&&std::strcmp(view_.current.id,remote_.appId))) {
         view_.sessionConflict=true;failLaunch("Another cloud game is active. No session was changed");return RecoveryResult::conflict;
     }
     if(trust_&&!trust_(context_,remote_.control))return failed("Could not trust the existing session endpoint");
@@ -639,7 +644,7 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
     if(status<1||status>6)return failed("The existing session is no longer resumable");
     const auto* request=obj(session,"sessionRequestData");
     const int existingApp=number(request,"appId",0);
-    if(conflict&&*view_.current.id){int requestedApp;if(!appId(view_.current.id,requestedApp)||existingApp!=requestedApp){view_.sessionConflict=true;failLaunch("Another cloud game is active. No session was changed");return RecoveryResult::conflict;}}
+    if(matchRequested&&*view_.current.id){int requestedApp;if(!appId(view_.current.id,requestedApp)||existingApp!=requestedApp){view_.sessionConflict=true;failLaunch("Another cloud game is active. No session was changed");return RecoveryResult::conflict;}}
     const bool retainedMatches=retained&&!std::strcmp(retained->id,remote_.id);
     const bool hasRetained=retainedMatches&&validateSettings(retained->settings)==SettingsError::none;
     const Session saved=hasRetained?*retained:Session{};

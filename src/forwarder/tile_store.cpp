@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tile_store.hpp"
 #include "files.hpp"
+#include "tile_manifest.hpp"
 #include "launch_args.hpp"
 #include "../vendor/cJSON.h"
 #include "../../tooling/native/hash.hpp"
@@ -120,18 +121,23 @@ int openRegular(int parent,const char* name,std::size_t limit) noexcept {
     const int fd=openAt(parent,name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
     if(fd<0)return -1;
     struct stat info{};
-    if(!statFile(fd,info)||!S_ISREG(info.st_mode)||info.st_size<=0||static_cast<std::uint64_t>(info.st_size)>limit) {
+    if(!statFile(fd,info)) {
+        const int error=errno;accountFile::close(fd);errno=error;return -1;
+    }
+    if(!S_ISREG(info.st_mode)||info.st_size<=0||static_cast<std::uint64_t>(info.st_size)>limit) {
         accountFile::close(fd);errno=EINVAL;return -1;
     }
     return fd;
 }
-Json readJsonFd(int fd) noexcept {
+Json readJsonFd(int fd,int* ioError=nullptr) noexcept {
+    if(ioError)*ioError=0;
+    const auto failed=[&]{if(ioError)*ioError=errno;return json(nullptr);};
     char text[16384];std::size_t used=0;
-    if(fd<0||!rewindFile(fd))return json(nullptr);
+    if(fd<0||!rewindFile(fd))return failed();
     while(used<sizeof(text)) {
         const auto n=accountFile::read(fd,text+used,sizeof(text)-used);
         if(n<0&&errno==EINTR)continue;
-        if(n<0)return json(nullptr);
+        if(n<0)return failed();
         if(!n)break;
         used+=static_cast<std::size_t>(n);
     }
@@ -140,11 +146,12 @@ Json readJsonFd(int fd) noexcept {
     if(std::strstr(text,"\\u0000"))return json(nullptr);
     return json(cJSON_ParseWithOpts(text,nullptr,1));
 }
-Json readJson(const char* directory,const char* name) noexcept {
+Json readJson(const char* directory,const char* name,int* ioError=nullptr) noexcept {
+    if(ioError)*ioError=0;
     Fd dir(openTree(directory));
-    if(!dir.valid())return json(nullptr);
+    if(!dir.valid()){if(ioError)*ioError=errno;return json(nullptr);}
     Fd file(openRegular(dir.get(),name,16383));
-    return readJsonFd(file.get());
+    return readJsonFd(file.get(),ioError);
 }
 bool readMetadata(int forward,int param,const char* expected,Entry& entry) noexcept {
     auto document=readJsonFd(forward);
@@ -195,7 +202,10 @@ int indexOf(const char* titleId) noexcept {
 }
 bool inventory(const char* root,bool (&occupied)[700],const Game* game,Entry& existing) noexcept {
     files::Directory directory(root);
-    if(!directory.valid())return !game||directory.error()==ENOENT||directory.error()==ENOTDIR;
+    if(!directory.valid()) {
+        errno=directory.error();
+        return errno==ENOENT||errno==ENOTDIR;
+    }
     while(const char* name=directory.next()) {
         if(game&&(!std::strncmp(name,".opennow-stage-",15)||!std::strncmp(name,".opennow-remove-",16)||
                   !std::strncmp(name,".opennow-upload-",16)))continue;
@@ -204,10 +214,19 @@ bool inventory(const char* root,bool (&occupied)[700],const Game* game,Entry& ex
         char child[1024],sysPath[1024];
         if(!files::join(child,root,name)||!files::join(sysPath,child,"sce_sys")){if(game)return false;continue;}
         files::Directory folder(child);
-        if(!folder.valid())continue;
+        if(!folder.valid()) {
+            const int error=folder.error();
+            if(error!=ENOENT&&error!=ENOTDIR&&error!=ELOOP){errno=error;return false;}
+            continue;
+        }
         files::Directory sys(sysPath);
+        if(!sys.valid()&&sys.error()!=ENOENT&&sys.error()!=ENOTDIR&&sys.error()!=ELOOP){errno=sys.error();return false;}
         if(sys.valid()) {
-            auto param=readJson(sysPath,"param.json");
+            int metadataError=0;
+            auto param=readJson(sysPath,"param.json",&metadataError);
+            if(!param&&metadataError&&metadataError!=ENOENT&&metadataError!=ENOTDIR&&metadataError!=EINVAL&&metadataError!=ELOOP) {
+                errno=metadataError;return false;
+            }
             char paramPath[1024];
             if(!files::join(paramPath,sysPath,"param.json")){if(game)return false;continue;}
             if(!param&&files::exists(paramPath)&&game){errno=EINVAL;return false;}
@@ -222,7 +241,8 @@ bool inventory(const char* root,bool (&occupied)[700],const Game* game,Entry& ex
                (!candidate.game.store[0]||!game->store[0]||same(candidate.game.store,game->store)))existing=candidate;
         }
     }
-    return !game||directory.error()==0;
+    if(directory.error()){errno=directory.error();return false;}
+    return true;
 }
 Result result(Code code,const char* titleId=nullptr,int error=0) noexcept {
     Result value;value.code=code;value.error=error;
@@ -244,16 +264,7 @@ bool contents(int fd,const char* const* allowed,unsigned count) noexcept {
     if(!ok||seen!=(1U<<count)-1){errno=EINVAL;return false;}
     return true;
 }
-struct StagedFile { const char* name; unsigned parent; std::size_t limit; unsigned mode; };
-constexpr StagedFile stagedFiles[]={
-    {"eboot.bin",0,2*1024*1024,0755},
-    {"forwarder.json",0,16383,0644},
-    {"libc.prx",2,2*1024*1024,0755},
-    {"param.json",1,16383,0644},
-    {"icon0.png",1,2*1024*1024,0644},
-    {"pic0.dds",1,3840*2160+148,0644},
-    {"pic1.dds",1,3840*2160+148,0644}
-};
+constexpr const auto& stagedFiles=tileManifest::files;
 class Stage {
 public:
     bool open(const char* path) noexcept {
@@ -262,22 +273,23 @@ public:
         directories[1].reset(openAt(directories[0].get(),"sce_sys",O_RDONLY|O_DIRECTORY|O_NOFOLLOW));
         directories[2].reset(openAt(directories[0].get(),"sce_module",O_RDONLY|O_DIRECTORY|O_NOFOLLOW));
         if(!directories[1].valid()||!directories[2].valid())return false;
-        const char* root[]={"eboot.bin","forwarder.json","sce_sys","sce_module"};
-        const char* sys[]={"param.json","icon0.png","pic0.dds","pic1.dds"};
-        const char* module[]={"libc.prx"};
-        if(!contents(directories[0].get(),root,4)||!contents(directories[1].get(),sys,4)||!contents(directories[2].get(),module,1))return false;
-        for(unsigned i=0;i<7;++i) {
+        const char* allowed[3][tileManifest::count+2]{};
+        unsigned allowedCount[3]{2,0,0};
+        allowed[0][0]="sce_sys";allowed[0][1]="sce_module";
+        for(const auto& spec:stagedFiles)allowed[spec.parent][allowedCount[spec.parent]++]=spec.name;
+        for(unsigned i=0;i<3;++i)if(!contents(directories[i].get(),allowed[i],allowedCount[i]))return false;
+        for(unsigned i=0;i<std::size(stagedFiles);++i) {
             const auto& spec=stagedFiles[i];
             files[i].reset(openRegular(directories[spec.parent].get(),spec.name,spec.limit));
             if(!files[i].valid())return false;
-            if(i>=5) {
+            if(spec.exactSize) {
                 struct stat info{};
                 if(!statFile(files[i].get(),info)||static_cast<std::uint64_t>(info.st_size)!=spec.limit){errno=EINVAL;return false;}
             }
         }
-        return readMetadata(files[1].get(),files[3].get(),nullptr,entry);
+        return readMetadata(files[tileManifest::forwarder].get(),files[tileManifest::parameters].get(),nullptr,entry);
     }
-    Fd directories[3],files[7];
+    Fd directories[3],files[tileManifest::count];
     Entry entry;
 };
 struct Program {const char* name; std::size_t size; const char* hash;};
@@ -307,7 +319,7 @@ bool verifyProgram(int fd,const Program& program) noexcept {
     return true;
 }
 bool verifyPrograms(const Stage& stage) noexcept {
-    return verifyProgram(stage.files[0].get(),programs[0])&&verifyProgram(stage.files[2].get(),programs[1]);
+    return verifyProgram(stage.files[tileManifest::program].get(),programs[0])&&verifyProgram(stage.files[tileManifest::runtime].get(),programs[1]);
 }
 std::uint32_t titleHash(const Game& game) noexcept {
     std::uint32_t hash=2166136261U;
@@ -360,7 +372,7 @@ bool copyStage(const Stage& source,const char* destination) noexcept {
     if(!files::join(sys,destination,"sce_sys")||!files::join(module,destination,"sce_module")||
        !files::mkdir(sys)||!files::mkdir(module))return false;
     const char* directories[]={destination,sys,module};
-    for(unsigned i=0;i<7;++i) {
+    for(unsigned i=0;i<std::size(stagedFiles);++i) {
         const auto& spec=stagedFiles[i];
         if(!files::join(to,directories[spec.parent],spec.name)||!copyFile(source.files[i].get(),to,spec.limit,spec.mode))return false;
     }
