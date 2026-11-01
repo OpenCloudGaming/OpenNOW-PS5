@@ -351,10 +351,11 @@ void* worker(void*) {
             login.finishAsync(sceKernelGetProcessTime()/1000000);
             const bool hadSession=*cloud.session().id;
             const bool stopped=(action==11&&!hadSession)||cloud.stop(login.cloudToken(),id);
+            if(hadSession&&stopped)signOutCleanupFailed=false;
             if((stopped||action==11)&&(hadSession||action==11)){opennow::sessionFile::remove(OPENNOW_SESSION_PATH);retainedProfile={};profileSaveFailed=false;}
             if(action==10){ps5::demo::requestStop();return nullptr;}
             if(stopped||action==11) {
-                if(action==11)signOutCleanupFailed=!stopped;
+                if(action==11&&hadSession&&!stopped)signOutCleanupFailed=true;
                 if(action!=18)login.cancel();
                 cloud.reset();catalogLoaded=false;streamFailure[0]=0;
             }
@@ -370,6 +371,7 @@ void* worker(void*) {
             if(cloud.stop(login.cloudToken(),id)){opennow::sessionFile::remove(OPENNOW_SESSION_PATH);retainedProfile={};profileSaveFailed=false;}
         }
         if (action==1) {
+            signOutCleanupFailed=false;
             http.cancelled.store(false);
             refreshHttp.cancelled.store(true);login.stopAsync();refreshHttp.cancelled.store(false);
             if(!*cloud.session().id) {cloud.reset();catalogLoaded=false;}
@@ -530,8 +532,9 @@ void* worker(void*) {
         // A cancellation during a blocking request must win over its response.
         if (command.load()==2||command.load()==10||command.load()==11||command.load()==18) continue;
         auto view=login.view();
-        if(signOutCleanupFailed&&view.state==State::cancelled&&!view.canSignOut)
-            std::snprintf(view.message,sizeof(view.message),"Signed out. The cloud session may still be running; end it from another client.");
+        if(signOutCleanupFailed&&view.state==State::cancelled)
+            std::snprintf(view.message,sizeof(view.message),"%s The cloud session may still be running; end it from another client.",
+                view.canSignOut?"Could not remove saved login. Try signing out again.":"Signed out.");
         if(forwardLaunchMode.load()) {
             if(launchArgs.status==opennow::forwarder::LaunchArgsStatus::invalid) {
                 view.state=State::failed;
@@ -733,7 +736,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     Screen screen=screenNow();
     if(forwardLaunchMode.load()&&!streaming&&(pressed&PS5_PAD_BUTTON_CIRCLE)) {
         if(activeHttp)activeHttp->cancelled.store(true);
-        submit(18,{});pressed=0;
+        submit(screen==Screen::signIn&&v.canSignOut?11:18,{});pressed=0;
     }
     if(screen!=Screen::detail)detailOpen=false;
     if(screen!=Screen::settings){confirmSignOut=confirmClear=confirmFixed=false;numberEdit={};}
@@ -1020,6 +1023,10 @@ int main(int argc,char** argv) {
             published.state=State::requesting;std::snprintf(published.message,sizeof(published.message),"Checking saved NVIDIA login...");
         } else if(name=="signin-failed") {
             published.state=State::failed;std::snprintf(published.message,sizeof(published.message),"Unable to reach NVIDIA (preview fixture: curl error 6)");
+        } else if(name=="signin-cleanup-warning"||name=="signin-signout-failed") {
+            published.state=State::cancelled;published.canSignOut=name=="signin-signout-failed";
+            std::snprintf(published.message,sizeof(published.message),"%s The cloud session may still be running; end it from another client.",
+                published.canSignOut?"Could not remove saved login. Try signing out again.":"Signed out.");
         }
     } else if(name=="library-loading") {
         publishedLibrary=opennow::CloudView{};publishedLibrary.state=CloudState::loading;
