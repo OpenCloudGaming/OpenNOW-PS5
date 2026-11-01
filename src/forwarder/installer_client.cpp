@@ -93,7 +93,8 @@ struct Stage {
             descriptors[i]=fd;
             struct stat info{};
             if(accountFile::checked(sceKernelFstat(fd,&info))<0)return wire::failure(errno,Code::stagingError);
-            if(!S_ISREG(info.st_mode)||info.st_size<=0||static_cast<std::uint64_t>(info.st_size)>wire::files[i].limit)
+            if(!S_ISREG(info.st_mode)||info.st_size<=0||static_cast<std::uint64_t>(info.st_size)>wire::files[i].limit||
+               (wire::files[i].exactSize&&static_cast<std::uint64_t>(info.st_size)!=wire::files[i].limit))
                 return wire::failure(EINVAL,Code::stagingError);
             lengths[i]=static_cast<std::uint64_t>(info.st_size);
             total+=static_cast<unsigned>(lengths[i]);

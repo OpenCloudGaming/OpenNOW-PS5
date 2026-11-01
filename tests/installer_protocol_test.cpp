@@ -76,8 +76,9 @@ void resetNative(Code code=Code::created) {
     cancelUpload=false;progress.clear();offsets.fill(0);makeHelper();
     const unsigned sizes[]={2*wire::chunkSize+17,wire::chunkSize+3,11,wire::chunkSize+1,2*wire::chunkSize+5,2*wire::chunkSize+7,31};
     for(unsigned i=0;i<staged.size();++i) {
-        staged[i].resize(sizes[i]);statSizes[i]=sizes[i];
-        for(unsigned j=0;j<sizes[i];++j)staged[i][j]=static_cast<std::uint8_t>(i*19+j);
+        const auto size=wire::files[i].exactSize?static_cast<std::size_t>(wire::files[i].limit):sizes[i];
+        staged[i].resize(size);statSizes[i]=size;
+        for(unsigned j=0;j<size;++j)staged[i][j]=static_cast<std::uint8_t>(i*19+j);
     }
     auto r=result(code);if(code==Code::created||code==Code::alreadyExists||code==Code::removed)std::strcpy(r.titleId,"PPSA99500");
     wire::Frame f;assert(wire::encode(r,installer::nextId.load(),f));
@@ -269,6 +270,12 @@ void nativeTests() {
         resetNative();statSizes[i]=0;assert(installer::install(stagedFolder).code==Code::stagingError&&sent.empty());
         resetNative();statSizes[i]=static_cast<std::size_t>(wire::files[i].limit+1);assert(installer::install(stagedFolder).code==Code::stagingError&&sent.empty());
         resetNative();nonRegular=static_cast<int>(i);assert(installer::install(stagedFolder).code==Code::stagingError&&sent.empty());
+        if(wire::files[i].exactSize) {
+            resetNative();--statSizes[i];const auto connections=connects.load();
+            value=installer::install(stagedFolder);
+            assert(value.code==Code::stagingError&&value.error==EINVAL&&sent.empty()&&connects==connections);
+        }
+
     }
     for(const bool eof:{false,true}) {
         resetNative();readFailure=4;readFailureOffset=wire::chunkSize;readEof=eof;

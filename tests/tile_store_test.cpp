@@ -157,6 +157,11 @@ int main() {
     const auto embedded=store::install(source.c_str(),paths);
     assert(embedded.code==Code::created&&std::strcmp(embedded.titleId,id));
     assert(store::remove(embedded.titleId,paths).ok());fs::remove_all(collision/"different-folder");
+    fs::create_directories(collision/"oversized-metadata/sce_sys");
+    write(collision/"oversized-metadata/sce_sys/param.json",std::string(body)+std::string(16384,' '));
+    const auto oversized=store::install(source.c_str(),paths);
+    assert(oversized.code==Code::created&&!std::strcmp(oversized.titleId,id));
+    assert(store::remove(oversized.titleId,paths).ok());fs::remove_all(collision/"oversized-metadata");
     fs::create_directories(collision/id/"sce_sys");write(collision/id/"sce_sys/param.json","{foreign malformed metadata");
     fs::create_directories(collision/"other-folder/sce_sys");
     fs::create_symlink(secret,collision/"other-folder/sce_sys/param.json");

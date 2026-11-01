@@ -623,7 +623,8 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
         clearSession();recoveryBlocked_=false;view_.launchError=view_.sessionConflict=false;
         view_.state=view_.count?CloudState::catalog:CloudState::idle;copy(view_.message,"Choose a game and store");return RecoveryResult::none;
     }
-    if(remoteCount_!=1||(matchRequested&&*view_.current.id&&std::strcmp(view_.current.id,remote_.appId))) {
+    int requestedApp=0,remoteApp=0;
+    if(remoteCount_!=1||(matchRequested&&*view_.current.id&&(!appId(view_.current.id,requestedApp)||!appId(remote_.appId,remoteApp)||requestedApp!=remoteApp))) {
         view_.sessionConflict=true;failLaunch("Another cloud game is active. No session was changed");return RecoveryResult::conflict;
     }
     if(trust_&&!trust_(context_,remote_.control))return failed("Could not trust the existing session endpoint");

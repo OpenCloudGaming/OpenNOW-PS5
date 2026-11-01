@@ -151,6 +151,18 @@ static void acceptedProfileTests() {
  }
 }
 static void recoveryTests() {
+ for(bool missingApp:{false,true}) {
+  Mock mock;const auto seat=existingSeat();
+  auto* root=cJSON_Parse(seat.c_str());assert(root);
+  if(missingApp)cJSON_DeleteItemFromObjectCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData"),"appId");
+  char* encoded=cJSON_PrintUnformatted(root);assert(encoded);const auto listed=remoteList(encoded);cJSON_free(encoded);cJSON_Delete(root);
+  const auto lookup=envelope(seat);mock.remote=listed.c_str();mock.lookup=lookup.c_str();
+  Cloud client(request,&mock,trust);client.load("fixture-jwt","fixture-device");
+  Game requested=client.view().games[0];std::strcpy(requested.id,"0042");
+  assert(client.recover("fixture-jwt","fixture-device",1,StreamSettings{},2,nullptr,true,&requested)==(missingApp?RecoveryResult::conflict:RecoveryResult::pending));
+  assert(!mock.posts&&!mock.deletes&&mock.puts==static_cast<unsigned>(!missingApp));
+  if(!missingApp)assert(client.stop("fixture-jwt","fixture-device"));
+ }
  {
   Mock mock;mock.created="{}";mock.createStatus=500;
   const auto seat=existingSeat(),listed=remoteList(seat),lookup=envelope(seat);
