@@ -124,6 +124,10 @@ During streaming, the touchpad moves the mouse. A physical click with one finger
 
 ### Custom stream settings and artwork cache
 
+**Settings → Network** selects **Automatic (NVIDIA)** or a manual region from NVIDIA's current list. Left/right changes and saves the preference immediately; Refresh reloads the available regions. Existing settings files migrate to Automatic. The choice applies to new sessions, including game home-screen tiles; resuming a session keeps its existing server. If a manual region is unavailable, choose another region or Automatic.
+
+The Network pane shows the regional endpoint and the last allocated streaming server. The allocated server also appears while connecting and in the in-game keyboard/mouse overlay. These can be different addresses. Automatic uses NVIDIA's routing; the app does not currently measure or rank region latency.
+
 Development build `00.002.043` adds editable stream settings. In **Settings → Stream**, left/right changes a value; Cross opens a digit editor for resolution, FPS, or bitrate. L1/R1 choose common values inside those editors. Options saves, Square reverts, and unsaved changes remain when leaving the pane. Saved settings apply to the next session, not an already-running game.
 
 The application allows even dimensions from 320×180 up to 3840×2160 and integer frame rates from 30–120 with qualified hardware decoding. Software H.264 is limited to 1920×1080 and 30–60 FPS. The bitrate limit is 4–100 Mb/s. Hardware availability and the current output can narrow those ranges; invalid or unqualified combinations cannot be saved. These are request limits, not guarantees of server acceptance or sustained performance. Video keeps its aspect ratio instead of stretching non-16:9 resolutions.

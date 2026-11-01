@@ -159,6 +159,35 @@ bool put(char* out,std::size_t cap,const char* in) {if(!in||std::strlen(in)>=cap
 template<std::size_t N> bool copy(char (&out)[N],const char* in){return put(out,N,in);}
 void wipeJson(cJSON* v) {for(;v;v=v->next){if(v->valuestring)secureErase(v->valuestring,std::strlen(v->valuestring));wipeJson(v->child);}}
 struct Json {cJSON* p;explicit Json(const Response& r):p(r.body?cJSON_ParseWithLengthOpts(r.body,r.length+1,nullptr,true):nullptr){}~Json(){wipeJson(p);cJSON_Delete(p);}};
+struct RegionList {
+    char names[maxRegions][regionNameSize]{},origins[maxRegions][272]{};
+    unsigned count=0;
+    bool incomplete=false;
+};
+void parseRegions(const cJSON* root,RegionList& out) noexcept {
+    const auto* metadata=obj(root,"metaData");
+    if(!cJSON_IsArray(metadata)||(obj(root,"requestStatus")&&number(obj(root,"requestStatus"),"statusCode")!=1)){out.incomplete=true;return;}
+    const auto value=[&](const char* key){const cJSON* item;cJSON_ArrayForEach(item,metadata)if(!std::strcmp(str(item,"key"),key))return str(item,"value");return "";};
+    const auto add=[&](const char* name){
+        if(!*name)return;
+        char origin[272];
+        if(!validRegionName(name)||!cloudControlOrigin(value(name),origin,sizeof(origin))){out.incomplete=true;return;}
+        for(unsigned i=0;i<out.count;++i)if(!std::strcmp(out.names[i],name))return;
+        if(out.count==maxRegions){out.incomplete=true;return;}
+        copy(out.names[out.count],name);copy(out.origins[out.count++],origin);
+    };
+    add(value("local-region"));
+    const char* names=value("gfn-regions");
+    while(*names) {
+        const char* end=std::strchr(names,',');if(!end)end=names+std::strlen(names);
+        while(names<end&&*names==' ')++names;
+        const char* last=end;while(last>names&&last[-1]==' ')--last;
+        const auto length=static_cast<std::size_t>(last-names);
+        if(length&&length<regionNameSize){char name[regionNameSize];std::memcpy(name,names,length);name[length]=0;add(name);}
+        else if(length)out.incomplete=true;
+        names=*end?end+1:end;
+    }
+}
 #define OPENNOW_APP_FIELDS "pageInfo{hasNextPage endCursor}items{id title images{GAME_BOX_ART KEY_ART HERO_IMAGE TV_BANNER} variants{id appStore gfn{status features{__typename ... on GfnSubscriptionFeatureValue{key value} ... on GfnSubscriptionFeatureValueList{key values}} library{status}}}}"
 const char* searchQuery=R"(query GetSearchFilterResults($vpcId:String!,$locale:String!,$fetchCount:Int!,$cursor:String!,$searchString:String!,$filters:AppFilterFields!){apps(vpcId:$vpcId,language:$locale,orderBy:"itemMetadata.relevance:DESC,sortName:ASC",first:$fetchCount,after:$cursor,searchQuery:$searchString,filters:$filters){)" OPENNOW_APP_FIELDS "}}";
 const char* browseQuery=R"(query GetFilterBrowseResults($vpcId:String!,$locale:String!,$fetchCount:Int!,$cursor:String!,$filters:AppFilterFields!){apps(vpcId:$vpcId,language:$locale,orderBy:"itemMetadata.relevance:DESC,sortName:ASC",first:$fetchCount,after:$cursor,filters:$filters){)" OPENNOW_APP_FIELDS "}}";
@@ -268,13 +297,30 @@ void Cloud::reset() noexcept {
     secureErase(remoteIds_,sizeof(remoteIds_));
     const unsigned revision=view_.revision,libraryRevision=library_.revision;
     view_={};library_={};view_.revision=revision;library_.revision=libraryRevision;
-    base_[0]=vpc_[0]=search_[0]=0;
+    base_[0]=allocationBase_[0]=vpc_[0]=search_[0]=0;
+    network_.endpoint[0]=network_.server[0]=network_.error[0]=0;
     for(auto& cursor:browseCursors_)cursor[0]=0;
     for(auto& cursor:libraryCursors_)cursor[0]=0;
 }
+bool Cloud::selectRegion(const char* name) noexcept {
+    if(!validRegionName(name)||*session_.id||view_.state==CloudState::starting||view_.state==CloudState::queued||view_.state==CloudState::ready)return false;
+    if(std::strcmp(name,network_.preferred)) {
+        copy(network_.preferred,name);allocationBase_[0]=network_.endpoint[0]=network_.error[0]=0;
+    }
+    return true;
+}
+bool Cloud::refreshRegions(const char* jwt,const char* device) noexcept {
+    if(*session_.id||view_.state==CloudState::starting||view_.state==CloudState::queued||view_.state==CloudState::ready)return false;
+    base_[0]=allocationBase_[0]=0;
+    // Settings refresh reports errors only in network_, preserving catalog and
+    // launch errors, selection, pagination and messages.
+    CloudView status;
+    return allocationEndpoint(jwt,device,status);
+}
 bool Cloud::connect(const char* jwt,const char* device,CloudView& target) noexcept {
-    const auto failTarget=[&](const char* text){target.state=CloudState::failed;std::snprintf(target.message,sizeof(target.message),"%s",text);return false;};
+    const auto failTarget=[&](const char* text){base_[0]=allocationBase_[0]=network_.endpoint[0]=0;copy(network_.error,text);target.state=CloudState::failed;std::snprintf(target.message,sizeof(target.message),"%s",text);return false;};
     if(*base_)return true;
+    network_.count=0;network_.error[0]=0;
     auto r=request_(context_,"GET","https://pcs.geforcenow.com/v1/serviceUrls",nullptr,nullptr,nullptr);
     if(r.error)return failTarget(r.error);
     {
@@ -291,9 +337,39 @@ bool Cloud::connect(const char* jwt,const char* device,CloudView& target) noexce
     char url[768];std::snprintf(url,sizeof(url),"%sv2/serverInfo",base_);
     r=request_(context_,"GET",url,nullptr,jwt,device);
     if(r.error){base_[0]=0;return failTarget(r.error);}
-    Json info(r);
     if(r.status!=200){base_[0]=0;return failTarget("Unable to read NVIDIA server information");}
-    if(!copy(vpc_,str(obj(info.p,"requestStatus"),"serverId"))||!*vpc_)copy(vpc_,"GFN-PC");
+    {
+        Json info(r);
+        if(!cJSON_IsObject(info.p)||(obj(info.p,"requestStatus")&&number(obj(info.p,"requestStatus"),"statusCode")!=1))return failTarget("Invalid NVIDIA server information");
+        if(!copy(vpc_,str(obj(info.p,"requestStatus"),"serverId"))||!*vpc_)copy(vpc_,"GFN-PC");
+        RegionList regions;parseRegions(info.p,regions);
+        for(unsigned i=0;i<regions.count;++i) {
+            copy(network_.names[network_.count],regions.names[i]);
+            copy(regionOrigins_[network_.count++],regions.origins[i]);
+        }
+    }
+    if(!*network_.preferred)cloudControlOrigin(base_,network_.endpoint,sizeof(network_.endpoint));
+    return true;
+}
+bool Cloud::allocationEndpoint(const char* jwt,const char* device,CloudView& target) noexcept {
+    if(*allocationBase_)return true;
+    if(!connect(jwt,device,target))return false;
+    const auto failed=[&](const char* text){network_.endpoint[0]=0;copy(network_.error,text);target.state=CloudState::failed;copy(target.message,text);return false;};
+    const char* selected=base_;
+    if(*network_.preferred) {
+        selected=nullptr;
+        for(unsigned i=0;i<network_.count;++i)if(!std::strcmp(network_.names[i],network_.preferred)){selected=regionOrigins_[i];break;}
+        if(!selected)return failed("Selected region is unavailable. Choose another region or Automatic in Settings > Network");
+        if(trust_&&!trust_(context_,selected))return failed("Could not trust the selected region endpoint");
+        if(std::strcmp(base_,selected)) {
+            char url[768];std::snprintf(url,sizeof(url),"%sv2/serverInfo",selected);
+            const auto r=request_(context_,"GET",url,nullptr,jwt,device);
+            if(r.error||r.status!=200)return failed("Selected region could not be reached. Retry or choose Automatic in Settings > Network");
+            Json info(r);if(!cJSON_IsObject(info.p)||(obj(info.p,"requestStatus")&&number(obj(info.p,"requestStatus"),"statusCode")!=1))return failed("Selected region returned invalid server information");
+        }
+    }
+    copy(allocationBase_,selected);network_.error[0]=0;
+    cloudControlOrigin(allocationBase_,network_.endpoint,sizeof(network_.endpoint));
     return true;
 }
 void Cloud::load(const char* jwt,const char* device,const char* search,bool next) noexcept {
@@ -422,15 +498,17 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
     const StreamSettings settings=requested;
     if(validateSettings(settings)!=SettingsError::none){failLaunch("Invalid stream settings");return;}
     if((audioChannels!=2&&audioChannels!=6&&audioChannels!=8)||audio::requestedChannels(settings.audio_mode,audioChannels)!=audioChannels){failLaunch("Invalid audio channel request");return;}
+    if(!allocationEndpoint(jwt,device,view_)){view_.launchError=true;return;}
     session_.settings=settings;
     allocationSettings_=settings;
     session_.audioChannels=audioChannels;
     audioCapacity_=audioChannels;
     char subSession[37];if(!newSubSession(subSession)){failLaunch("Could not create cloud session identity");return;}
     currentNow_=now;view_.sessionConflict=false;remote_={};remoteCount_=0;conflictUntil_=0;
-    copy(controlBase_,base_);
+    network_.server[0]=0;
+    copy(controlBase_,allocationBase_);
     char netId[128]{},netUrl[768],netBody[256];
-    std::snprintf(netUrl,sizeof(netUrl),"%sv2/nettestsession",base_);
+    std::snprintf(netUrl,sizeof(netUrl),"%sv2/nettestsession",allocationBase_);
     std::snprintf(netBody,sizeof(netBody),
         R"({"netTestRequestData":{"clientPlatformName":"GFN-PC","netTestProfile":{"widthInPixels":%d,"heightInPixels":%d,"framesPerSecond":%d}}})",
         settings.width,settings.height,settings.fps);
@@ -470,7 +548,7 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
      cJSON_AddNumberToObject(display,"desiredContentMaxLuminance",1000);cJSON_AddNumberToObject(display,"desiredContentMinLuminance",0);cJSON_AddNumberToObject(display,"desiredContentMaxFrameAverageLuminance",400);
     }else cJSON_AddNullToObject(monitor,"displayData");cJSON_AddNullToObject(monitor,"hdr10PlusGamingData");
     char* body=cJSON_PrintUnformatted(root);cJSON_Delete(root);if(!body){failLaunch("Out of memory");return;}
-    char url[768];std::snprintf(url,sizeof(url),"%sv2/session?keyboardLayout=en-US_qwerty&languageCode=en_US",base_);
+    char url[768];std::snprintf(url,sizeof(url),"%sv2/session?keyboardLayout=en-US_qwerty&languageCode=en_US",allocationBase_);
     view_.state=CloudState::starting;
     auto r=request_(context_,"POST",url,body,jwt,device);cJSON_free(body);parseSession(r);nextPoll_=now+3;
     if(!*session_.id&&(r.error||(r.status>=200&&r.status<300)||r.status==408||r.status==425||r.status==429||r.status>=500))recoveryBlocked_=true;
@@ -499,6 +577,8 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
     if(validateSettings(settings)!=SettingsError::none||(audioChannels!=2&&audioChannels!=6&&audioChannels!=8))return failed("Invalid recovery stream settings");
     const std::uint64_t began=monotonicMs();
     if(!began)return failed("Could not start the bounded session recovery check");
+    // Recovery locates an existing session independently of the preference for
+    // the next allocation. A missing manual region must not strand that session.
     if(!connect(jwt,device,view_))return RecoveryResult::failed;
     const bool conflict=view_.sessionConflict;
     if(!conflict||now>=conflictUntil_||!remoteCount_) {
@@ -508,21 +588,16 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
         auto info=request_(context_,"GET",url,nullptr,jwt,device);
         if(info.status==401||info.status==403)return failed("Authentication required to check existing sessions");
         {
-            Json root(info);const auto* metadata=obj(root.p,"metaData");
-            if(info.error||info.status<200||info.status>=300||!cJSON_IsArray(metadata)||(obj(root.p,"requestStatus")&&number(obj(root.p,"requestStatus"),"statusCode")!=1))incomplete=true;
-            else {
-                const auto metadataValue=[&](const char* key){const cJSON* entry;cJSON_ArrayForEach(entry,metadata)if(!std::strcmp(str(entry,"key"),key))return str(entry,"value");return "";};
-                const auto add=[&](const char* name){
-                    if(!*name)return;
-                    char origin[512];if(!cloudControlOrigin(metadataValue(name),origin,sizeof(origin)))return;
-                    for(unsigned i=0;i<count;++i)if(!std::strcmp(regions[i],origin))return;
-                    if(count==32){incomplete=true;return;}
-                    if(trust_&&!trust_(context_,origin)){incomplete=true;return;}
-                    copy(regions[count++],origin);
-                };
-                add(metadataValue("local-region"));
-                const char* names=metadataValue("gfn-regions");
-                while(*names){const char* end=std::strchr(names,',');if(!end)end=names+std::strlen(names);while(names<end&&*names==' ')++names;const char* last=end;while(last>names&&last[-1]==' ')--last;char name[128];const auto length=static_cast<std::size_t>(last-names);if(length&&length<sizeof(name)){std::memcpy(name,names,length);name[length]=0;add(name);}else if(length)incomplete=true;names=*end?end+1:end;}
+            Json root(info);RegionList discovered;
+            if(info.error||info.status<200||info.status>=300)incomplete=true;
+            else {parseRegions(root.p,discovered);incomplete=discovered.incomplete;}
+            for(unsigned i=0;i<discovered.count;++i) {
+                const auto* origin=discovered.origins[i];
+                bool duplicate=false;
+                for(unsigned j=0;j<count;++j)if(!std::strcmp(regions[j],origin)){duplicate=true;break;}
+                if(duplicate)continue;
+                if(count==32||(trust_&&!trust_(context_,origin))){incomplete=true;continue;}
+                copy(regions[count++],origin);
             }
         }
         for(unsigned i=0;i<count;++i) {
@@ -606,8 +681,8 @@ bool Cloud::parseSession(const Response& r) noexcept {
     if(r.error){failLaunch(r.error);return false;}Json root(r);auto* sess=obj(root.p,"session");
     if(!*session_.id&&r.status!=401&&sessionConflict(root.p)) {
         remote_={};remoteCount_=0;
-        const cJSON* candidate;cJSON_ArrayForEach(candidate,obj(root.p,"otherUserSessions"))remoteSeat(candidate,base_);
-        remoteSeat(sess,base_);conflictUntil_=currentNow_+30;
+        const cJSON* candidate;cJSON_ArrayForEach(candidate,obj(root.p,"otherUserSessions"))remoteSeat(candidate,*controlBase_?controlBase_:base_);
+        remoteSeat(sess,*controlBase_?controlBase_:base_);conflictUntil_=currentNow_+30;
         recoveryBlocked_=true;view_.sessionConflict=true;
         failLaunch("A cloud session is already active. Resume or stop it before launching another game");return false;
     }
@@ -655,6 +730,10 @@ bool Cloud::parseSession(const Response& r) noexcept {
             }
         }
         if(bestPort){copy(session_.mediaIp,bestIp);session_.mediaPort=bestPort;break;}
+    }
+    if(*session_.mediaIp&&session_.mediaPort>0) {
+        // Display only the media host/port, never signaling URLs or session IDs.
+        std::snprintf(network_.server,sizeof(network_.server),std::strchr(session_.mediaIp,':')&&*session_.mediaIp!='['?"[%s]:%d":"%s:%d",session_.mediaIp,session_.mediaPort);
     }
     if(patching||state==6||(resumePending_&&(state==4||state==5))){view_.state=CloudState::queued;copy(view_.message,patching?"Server patching game. Waiting for launch...":"Cloud session resuming. Waiting for server...");}
     else if((state==2||state==3)&&*session_.signaling){resumePending_=false;view_.state=CloudState::ready;copy(view_.message,"Cloud session ready. Connecting stream...");}
