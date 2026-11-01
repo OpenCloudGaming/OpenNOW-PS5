@@ -14,6 +14,7 @@
 namespace {
 std::string testRoot;
 unsigned scenario=0,lookups=0,catalogs=0,launches=0,networkTests=0,sessionLists=0,deletes=0;
+unsigned removalAttempts=0,signOutStage=0,recoveryInfos=0;
 std::atomic_uint refreshes{0};
 std::uint64_t clockUs=1000000;
 std::chrono::steady_clock::time_point deadline;
@@ -39,7 +40,10 @@ int sceKernelClose(int fd) {return static_cast<int>(native(::close(fd)));}
 int sceKernelFsync(int fd) {return static_cast<int>(native(::fsync(fd)));}
 int sceKernelFchmod(int fd,unsigned mode) {return static_cast<int>(native(::fchmod(fd,mode)));}
 int sceKernelRename(const char* from,const char* to) {std::string a,b;return static_cast<int>(native(::rename(mapPath(from,a),mapPath(to,b))));}
-int sceKernelUnlink(const char* path) {std::string mapped;return static_cast<int>(native(::unlink(mapPath(path,mapped))));}
+int sceKernelUnlink(const char* path) {
+    if(scenario==8&&!std::strcmp(path,OPENNOW_ACCOUNT_PATH)&&++removalAttempts<=2){errno=EACCES;return static_cast<int>(native(-1));}
+    std::string mapped;return static_cast<int>(native(::unlink(mapPath(path,mapped))));
+}
 int sceKernelMkdir(const char* path,unsigned mode) {std::string mapped;return static_cast<int>(native(::mkdir(mapPath(path,mapped),mode)));}
 unsigned long long sceKernelGetProcessTime() {return clockUs;}
 int sceKernelUsleep(unsigned) {
@@ -67,6 +71,30 @@ int sceKernelUsleep(unsigned) {
         assert(!publishedStreamFailure&&opennow::sessionFile::load(OPENNOW_SESSION_PATH,"fixture-user",saved)==opennow::sessionFile::Status::loaded);
         assert(saved.settings==publishedLaunch&&!std::strcmp(saved.sessionId,"fixture-new"));
         command.store(10);
+    }
+    if(scenario==7&&launches&&!escaped){assert(publishedSession);escaped=true;command.store(11);}
+    if(scenario==7&&published.state==State::cancelled) {
+        assert(!publishedSession&&!published.canSignOut&&std::strstr(published.message,"may still be running"));
+        assert(!std::filesystem::exists(testRoot+"/account.bin"));command.store(10);
+    }
+    if(scenario==8&&launches&&signOutStage==0){signOutStage=1;command.store(11);}
+    else if(scenario==8&&published.state==State::cancelled) {
+        assert(!publishedSession&&deletes==1);
+        if(signOutStage<=2) {
+            assert(published.canSignOut&&std::strstr(published.message,"Could not remove saved login")&&std::strstr(published.message,"may still be running"));
+            assert(std::filesystem::exists(testRoot+"/account.bin"));++signOutStage;command.store(11);
+        } else if(signOutStage==3) {
+            assert(!published.canSignOut&&std::strstr(published.message,"may still be running"));
+            signOutStage=4;command.store(1);
+        } else if(signOutStage==5) {
+            assert(!published.canSignOut&&!std::strstr(published.message,"may still be running"));
+            signOutStage=6;command.store(10);
+        }
+    }
+    if(scenario==8&&signOutStage==4&&published.state==State::waiting){signOutStage=5;command.store(11);}
+    if(scenario==9&&publishedCloud.launchError&&!escaped){escaped=true;submit(15,{});}
+    if(scenario==9&&sessionLists==3) {
+        assert(recoveryInfos==1&&!publishedCloud.launchError&&!publishedSession&&launches==1);command.store(10);
     }
     if(scenario>=3&&catalogs==2)command.store(10);
     return 0;
@@ -102,7 +130,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
     }
     assert(bearer&&!std::strcmp(bearer,"fixture-cloud")&&device&&std::strlen(device)==36);
     assert(std::strcmp(method,"PUT")&&"Forwarder escape must not resume another cloud game");
-    if(std::strstr(url,"serverInfo"))return reply(serverInfo);
+    if(std::strstr(url,"serverInfo")){if(scenario==9&&escaped)++recoveryInfos;return reply(serverInfo);}
     if(std::strstr(url,"graphql")) {
         if(std::strstr(body,"variantIds")) {
             ++lookups;assert(!catalogs&&forwardLaunchMode.load());
@@ -118,7 +146,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         return reply(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"fixture-net"}})");
     }
     if(!std::strcmp(method,"GET")&&std::string(url).ends_with("/v2/session")) {
-        assert((escaped||scenario==6)&&!forwardLaunchMode.load());++sessionLists;
+        assert((escaped||scenario==6)&&(scenario==9||!forwardLaunchMode.load()));++sessionLists;
         if(scenario==5&&!std::strcmp(url,"https://test.geforcenow.com/v2/session")) {
             static std::string response=std::string(R"({"requestStatus":{"statusCode":1},"sessions":[)")+existingSeat+"]}";
             return reply(response.c_str());
@@ -138,10 +166,11 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         const auto* features=cJSON_GetObjectItemCaseSensitive(request,"requestedStreamingFeatures");
         assert(cJSON_GetObjectItemCaseSensitive(features,"maxBitrateKbps")->valueint==20000);cJSON_Delete(root);
         if(scenario==5)return reply(R"({"requestStatus":{"statusCode":11},"otherUserSessions":[{"sessionId":"fixture-existing","status":2,"sessionRequestData":{"appId":43}}]})",403);
+        if(scenario==9)return reply("{}",500);
         return reply(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-new","status":0}})");
     }
     assert(!std::strcmp(method,"DELETE")&&!std::strcmp(url,"https://test.geforcenow.com/v2/session/fixture-new"));
-    ++deletes;return reply("{}");
+    ++deletes;return reply("{}",scenario==7||scenario==8?401:200);
 }
 }
 static void runScenario(unsigned value) {
@@ -167,13 +196,16 @@ static void runScenario(unsigned value) {
     if(scenario==4)assert(lookups==1&&!launches&&catalogs==2);
     if(scenario==3||scenario==4)assert(!sessionLists&&!networkTests&&!deletes);
     if(scenario==5)assert(lookups==1&&launches==1&&networkTests==1&&catalogs==2&&!publishedSession&&!sessionLists&&!deletes);
-    if(scenario==6)assert(!lookups&&!launches&&!networkTests&&catalogs==2&&sessionLists==3&&!deletes);
-    assert(std::filesystem::exists(testRoot+"/account.bin"));
+    if(scenario==6)assert(!lookups&&!launches&&!networkTests&&catalogs==2&&!sessionLists&&!deletes);
+    if(scenario==7)assert(launches==1&&lookups==1&&networkTests==1&&deletes==1&&!publishedSession);
+    if(scenario==8)assert(signOutStage==6&&deletes==1&&removalAttempts==4);
+    if(scenario==9)assert(launches==1&&lookups==1&&networkTests==1&&sessionLists==3&&recoveryInfos==1&&!deletes);
+    assert(std::filesystem::exists(testRoot+"/account.bin")== (scenario!=7&&scenario!=8));
     assert(!std::filesystem::exists(testRoot+"/session.bin"));
     std::filesystem::remove_all(testRoot);
 }
 int main() {
-    for(unsigned scenario=0;scenario<7;++scenario) {
+    for(unsigned scenario=0;scenario<10;++scenario) {
         const pid_t child=fork();assert(child>=0);
         if(!child){runScenario(scenario);std::exit(0);}
         int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);

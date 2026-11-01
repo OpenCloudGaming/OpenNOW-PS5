@@ -104,6 +104,17 @@ void startBlocked(opennow::Login& login, Transport& refresh) {
 }
 int main() {
     {
+        Account account;auto owner=initial();
+        Transport refresh{{"/token",200,R"({"access_token":"access2","id_token":"e30.eyJleHAiOjF9.signature","expires_in":180})"},
+            {"/userinfo",200,R"({"sub":"synthetic-user"})"},{"/client_token",404,"{}"}};
+        opennow::Login login(Transport::request,&owner,account.path.c_str());signIn(login);
+        tickUntil(login,refresh,125,[&]{return login.view().state==opennow::State::requesting;});
+        assert(login.view().canSignOut&&!*login.cloudToken());
+        login.cancel();
+        assert(login.view().state==opennow::State::cancelled&&!login.view().canSignOut);
+        assert(access(account.path.c_str(),F_OK)!=0);
+    }
+    {
         Account account; auto owner = initial();
         Transport refresh{{"/token",200,R"({"access_token":"access2","id_token":"cloud2","refresh_token":"rotated","expires_in":180})"},
             {"/userinfo",200,R"({"sub":"synthetic-user"})"},{"/client_token",404,"{}"}};

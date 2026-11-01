@@ -1470,7 +1470,7 @@ void signIn(Canvas& c, const Model& m) {
         string_view url(v.url);
         if(url.rfind("https://",0)==0)url.remove_prefix(8);
         std::snprintf(text,sizeof(text),"Or visit %.*s on any device and enter this code. Your login stays saved on this PS5.",static_cast<int>(url.size()),url.data());
-    } else if(requesting||failed)std::snprintf(text,sizeof(text),"%s",v.message);
+    } else if(requesting||failed||(v.state==State::cancelled&&*v.message))std::snprintf(text,sizeof(text),"%s",v.message);
     else std::snprintf(text,sizeof(text),"OpenNOW connects to your GeForce NOW account without storing your NVIDIA password. Sign in from your phone, then come straight back to the controller.");
     y+=drawWrapped(c,Face::semibold,22,120,y,37,text,800,3,failed?coral:muted)*37.0f;
     if(waiting) {
@@ -1513,7 +1513,7 @@ void signIn(Canvas& c, const Model& m) {
     }
     labelCenter(c,Face::black,22,1520,708,"Scan with your phone",face);
     labelCenter(c,Face::semibold,16,1520,754,waiting?"Opens NVIDIA sign-in with this code filled in":"A QR code appears after sign-in starts",muted);
-    const Hint left[]={closeAppHint};
+    const Hint left[]={v.canSignOut?Hint{Glyph::circle,"Sign out"}:closeAppHint};
     const Hint right[]={{Glyph::cross,failed?"Try again":"Sign in"}};
     chrome(c,m,"Welcome to OpenNOW",false,left,1,right,waiting||requesting?0:1);
 }

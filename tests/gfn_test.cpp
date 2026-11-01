@@ -75,6 +75,8 @@ int main() {
             {200,R"({"sub":"test-user"})"}}};
         opennow::Login login(Fake::request,&f); login.begin("id",0); login.tick(5);
         assert(login.view().state == State::requesting && !*login.cloudToken());
+        assert(login.view().canSignOut);
+        login.cancel();assert(login.view().state==State::cancelled&&!login.view().canSignOut);
     }
     {
         const auto id = jwt("{\"exp\":" + std::to_string(std::time(nullptr)+400) + "}");
@@ -86,6 +88,7 @@ int main() {
         login.tick(125); assert(!std::strcmp(login.cloudToken(),id.c_str()));
         login.tick(410); assert(login.view().state == State::requesting && !*login.cloudToken());
         assert(login.view().profileVerified);
+        assert(login.view().canSignOut);
     }
     {
         const auto id = jwt(R"({"exp":4102444800})");
