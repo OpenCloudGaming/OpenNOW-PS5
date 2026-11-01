@@ -96,11 +96,23 @@ int main() {
             {"/client_token",404,"{}"}}};
         opennow::Login login(Fake::request,&fake,path.c_str()); char device[37]{};
         assert(login.restore(device,0)); assert(login.view().state == opennow::State::requesting);
+        assert(login.view().canSignOut);
         assert(contents(path.c_str()) == saved);
         login.tick(29); assert(fake.calls == 2);
         login.tick(30); assert(login.view().state == opennow::State::authenticated);
+        assert(!login.view().canSignOut);
         assert(!std::strcmp(login.cloudToken(),"cloud3"));
     }
+    {
+        Fake fake{{{"/token",503,"temporary"},{"/token",503,"temporary"}}};
+        opennow::Login login(Fake::request,&fake,path.c_str()); char device[37]{};
+        assert(login.restore(device,0)&&login.view().canSignOut);
+        login.cancel();
+        assert(login.view().state==opennow::State::cancelled&&!login.view().canSignOut);
+        assert(access(path.c_str(),F_OK)!=0&&!*login.cloudToken());
+        login.tick(30);assert(fake.calls==2);
+    }
+    signIn(path.c_str());
     for (const auto& response : {Reply{"/token",503,"temporary"},
         Reply{"/token",200,"malformed"}, Reply{"/token",400,R"({"error":"invalid_request"})"}}) {
         // A rejected client credential does not make a temporary OAuth fallback

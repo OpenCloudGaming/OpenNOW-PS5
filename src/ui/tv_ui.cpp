@@ -1513,7 +1513,7 @@ void signIn(Canvas& c, const Model& m) {
     }
     labelCenter(c,Face::black,22,1520,708,"Scan with your phone",face);
     labelCenter(c,Face::semibold,16,1520,754,waiting?"Opens NVIDIA sign-in with this code filled in":"A QR code appears after sign-in starts",muted);
-    const Hint left[]={closeAppHint};
+    const Hint left[]={v.canSignOut?Hint{Glyph::circle,"Sign out"}:closeAppHint};
     const Hint right[]={{Glyph::cross,failed?"Try again":"Sign in"}};
     chrome(c,m,"Welcome to OpenNOW",false,left,1,right,waiting||requesting?0:1);
 }
