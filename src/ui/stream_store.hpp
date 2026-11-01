@@ -26,14 +26,14 @@ struct StreamStore {
     bool accept(const StreamSettings& s,Available available) const noexcept {return validateSettings(s)==SettingsError::none&&available(s);}
     void save(const char* path,const StreamSettings& s,Available available) noexcept {
         if(!accept(s,available))return;
-        const settingsFile::Saved next{true,s,saved.artworkCache};
+        auto next=saved;next.hasSettings=true;next.settings=s;
         info.saveError=settingsFile::save(path,next);
         if(info.saveError)return;
         saved=next;defaults=s;++info.revision;
         info.saved=true;info.savedUnavailable=info.loadCorrupt=info.loadUnreadable=false;
     }
     void reset(const char* path) noexcept {
-        const settingsFile::Saved next{false,best,saved.artworkCache};
+        auto next=saved;next.hasSettings=false;next.settings=best;
         info.saveError=settingsFile::save(path,next);
         if(info.saveError)return;
         saved=next;defaults=best;++info.revision;
@@ -45,6 +45,14 @@ struct StreamStore {
         auto next=saved;next.artworkCache=wanted;
         info.cacheSaveError=settingsFile::save(path,next);
         if(!info.cacheSaveError)saved=next;
+    }
+    int region(const char* path,const char* name) noexcept {
+        if(!validRegionName(name))return EINVAL;
+        auto next=saved;
+        std::snprintf(next.region,sizeof(next.region),"%s",name);
+        const int error=settingsFile::save(path,next);
+        if(!error)saved=next;
+        return error;
     }
     std::optional<StreamSettings> launch(bool requested,const StreamSettings& s,Available available) const noexcept {
         if(!requested)return defaults;

@@ -16,9 +16,9 @@ enum class Screen {
     signIn, catalogLoading, catalogEmpty, catalogError, grid, search, detail, settings,
     launching, connecting, cleanupFailed, streamEnded, launchFailed, keyboard
 };
-enum class SettingsPane { stream, display, controller, cache, account, about };
+enum class SettingsPane { stream, display, controller, cache, account, about, network };
 constexpr unsigned gridColumns(Section section) noexcept {return section==Section::library?7:10;}
-constexpr unsigned settingsPanes=6;
+constexpr unsigned settingsPanes=7;
 
 struct HomeTile {
     enum class Stage { hidden, working, done };
@@ -102,8 +102,9 @@ struct Model {
     const char* detailAction;
     const HomeTile& tile;
     Motion* motion=nullptr;
+    const NetworkView* network=nullptr;
 };
 void render(ps5::demo::Canvas& canvas, const Model& model) noexcept;
-struct Overlay { const StreamKeyboard& keyboard; bool launcher; unsigned speed; bool inputReady; };
+struct Overlay { const StreamKeyboard& keyboard; bool launcher; unsigned speed; bool inputReady; const char* server=""; };
 void renderOverlay(ps5::demo::Canvas& canvas, const Overlay& overlay) noexcept;
 }
