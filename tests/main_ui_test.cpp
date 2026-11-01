@@ -865,6 +865,11 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     published.state=State::requesting;published.canSignOut=true;
     press(PS5_PAD_BUTTON_CROSS);assert(command.load()==0);
     press(PS5_PAD_BUTTON_CIRCLE);assert(take()==11&&http.cancelled);
+    forwardLaunchMode.store(true);http.cancelled=false;
+    press(PS5_PAD_BUTTON_CIRCLE);assert(take()==11&&http.cancelled);
+    published.canSignOut=false;published.state=State::waiting;http.cancelled=false;
+    press(PS5_PAD_BUTTON_CIRCLE);assert(take()==18&&http.cancelled);
+    forwardLaunchMode.store(false);
     http.cancelled=false;published.canSignOut=false;
     published.state=State::failed;publishedSession=true;
     assert(current()==Screen::signIn);
