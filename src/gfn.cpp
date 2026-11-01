@@ -211,7 +211,6 @@ void Login::cancel() noexcept {
     const bool removed = forget();
     fail(removed ? "Signed out. Press CROSS to sign in" :
         "Could not remove saved login. Try signing out again", State::cancelled);
-    view_.canSignOut = !removed;
 }
 void Login::begin(const char* deviceId, std::uint64_t now) noexcept {
     stopAsync(); now_ = now;
@@ -344,7 +343,6 @@ bool Login::verify(std::uint64_t now, bool refreshing) noexcept {
             forget(); fail("Saved NVIDIA login expired. Press CROSS to sign in");
         } else {
             view_.state = State::requesting; restoring_ = true; nextPoll_ = now + 30;
-            view_.canSignOut = true;
             if (refreshing) view_.sessionSaved = save();
             copy(view_.message,"Could not verify saved login. Retrying; CIRCLE to sign out");
         }
@@ -395,7 +393,6 @@ void Login::refresh(std::uint64_t now) noexcept {
     nextPoll_ = now + 30; refreshAt_ = now + 30;
     if (view_.state != State::authenticated || !serviceValid(now)) {
         restoring_ = true; view_.state = State::requesting;
-        view_.canSignOut = true;
         copy(view_.message,"Could not restore NVIDIA login. Retrying; CIRCLE to sign out");
     }
 }
@@ -463,7 +460,6 @@ bool Login::restore(char (&deviceId)[37], std::uint64_t now) noexcept {
     const auto wall = wallTime();
     serviceExpiresAt_ = serviceJwt_ ? now + (serviceWallExpiry_ > wall ? serviceWallExpiry_-wall : 0) : now + 3600;
     view_ = {}; view_.state = State::requesting; restoring_ = true;
-    view_.canSignOut = true;
     copy(view_.message,"Restoring saved NVIDIA login...");
     refresh(now);
     return true;

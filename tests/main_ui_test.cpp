@@ -93,11 +93,9 @@ void storeChecks() {
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded);
     assert(!file.hasSettings&&file.artworkCache&&file.settings==quality&&store.info.revision==1);
     const StreamSettings custom{1600,900,45,33000};
-    assert(store.region(path,"EU-WEST")==0);
     store.save(path,custom,available);
     assert(store.defaults==custom&&store.info.revision==2&&store.info.saved);
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&file.hasSettings&&file.settings==custom&&file.artworkCache);
-    assert(!std::strcmp(file.region,"EU-WEST"));
     StreamSettings invalid=custom;invalid.width=1601;
     store.save(path,invalid,available);
     StreamSettings hardware=custom;hardware.mode=opennow::VideoMode::h264Hardware;hardware.network=opennow::NetworkPolicy::fixed;
@@ -118,8 +116,6 @@ void storeChecks() {
     assert(!store.info.saveError);
     assert(store.defaults==quality&&store.info.revision==3&&!store.info.saved);
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&!file.hasSettings&&!file.artworkCache);
-    assert(!std::strcmp(file.region,"EU-WEST"));
-    assert(store.region(broken,"EU-CENTRAL")!=0&&!std::strcmp(store.saved.region,"EU-WEST"));
     writeV1(path,StreamProfile::smooth);
     store.load(path,quality,true,available);
     assert(store.info.saved&&!store.info.savedUnavailable&&store.defaults==smooth&&store.artworkSaved);
@@ -138,13 +134,6 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     published.state=State::authenticated;published.sessionSaved=true;
     publishedDefaults=opennow::gpu::bestSettings();publishedSettings.revision=1;
     const auto press=[&](unsigned buttons){testButtons=0;draw(canvas);testButtons=buttons;draw(canvas);};
-
-    // Startup recovery has no previous launch: both advertised actions must work.
-    publishedCloud.state=CloudState::failed;publishedCloud.launchError=true;
-    assert(!hasLastLaunch&&current()==Screen::launchFailed);
-    press(PS5_PAD_BUTTON_CROSS);assert(take()==15&&!http.cancelled);
-    press(PS5_PAD_BUTTON_CIRCLE);assert(take()==19&&!http.cancelled);
-    publishedCloud.launchError=false;
 
     publishedLibrary.state=CloudState::loading;publishedCloud.state=CloudState::catalog;
     for(unsigned i=0;i<14;++i)game(publishedCloud,i,"Browse Game","STEAM",i==3);
@@ -339,7 +328,7 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
         assert(current()==Screen::launchFailed&&publishedCloud.launchError&&publishedCloud.state==CloudState::catalog);
         assert(!std::strcmp(publishedCloud.current.title,publishedLibrary.games[7].title)&&std::strstr(publishedCloud.message,"Not qualified"));
         testButtons=0;draw(canvas);
-        press(PS5_PAD_BUTTON_CIRCLE);assert(take()==19);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(take()==15);
         publishedCloud=before;
     }
 
@@ -634,7 +623,7 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
         press(PS5_PAD_BUTTON_L1);press(PS5_PAD_BUTTON_TRIANGLE);
         assert(command.load()==0&&section==Section::library);
         press(PS5_PAD_BUTTON_CIRCLE);
-        assert(take()==19&&!http.cancelled);
+        assert(take()==15&&!http.cancelled);
     }
     publishedCloud.launchError=false;publishedCloud.state=CloudState::catalog;
     publishedStreamFailure=true;
@@ -864,30 +853,6 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     testButtons=0;draw(canvas);
     assert(!testArt.paused());
     artCache=nullptr;
-
-    // A saved-login outage offers sign-out, not application exit (issue #22).
-    published.state=State::requesting;published.canSignOut=true;
-    press(PS5_PAD_BUTTON_CROSS);assert(command.load()==0);
-    press(PS5_PAD_BUTTON_CIRCLE);assert(take()==11&&http.cancelled);
-    http.cancelled=false;published.canSignOut=false;
-    // Network controls submit identifiers and preserve unrelated stream drafts.
-    published.state=State::authenticated;section=Section::settings;
-    settingsPane=SettingsPane::network;settingsContent=true;settingsRow=0;
-    publishedNetwork.count=2;
-    std::snprintf(publishedNetwork.names[0],opennow::regionNameSize,"EU-WEST");
-    std::snprintf(publishedNetwork.names[1],opennow::regionNameSize,"EU-CENTRAL");
-    const auto networkDraft=draft;
-    press(PS5_PAD_BUTTON_RIGHT);
-    {Request request;assert(take(request)==20&&!std::strcmp(request.region,"EU-WEST"));}
-    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"EU-WEST");
-    press(PS5_PAD_BUTTON_RIGHT);
-    {Request request;assert(take(request)==20&&!std::strcmp(request.region,"EU-CENTRAL"));}
-    press(PS5_PAD_BUTTON_LEFT);
-    {Request request;assert(take(request)==20&&!*request.region);}
-    assert(draft==networkDraft);
-    press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_CROSS);assert(take()==21);
-    press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent&&command.load()==0);
-    publishedNetwork={};section=Section::library;
 
     published.state=State::failed;publishedSession=true;
     assert(current()==Screen::signIn);

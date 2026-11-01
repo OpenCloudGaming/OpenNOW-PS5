@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "gfn.hpp"
-#include "region.hpp"
 #include "stream/stream_settings.hpp"
 struct cJSON;
 namespace opennow {
@@ -52,9 +51,6 @@ public:
     void tick(const char* jwt,const char* device,std::uint64_t now) noexcept;
     bool stop(const char* jwt,const char* device) noexcept;
     void reset() noexcept;
-    bool selectRegion(const char* name) noexcept;
-    bool refreshRegions(const char* jwt,const char* device) noexcept;
-    const NetworkView& network() const noexcept {return network_;}
     const CloudView& view() const {return view_;}
     const CloudView& library() const {return library_;}
     const Session& session() const {return session_;}
@@ -63,7 +59,6 @@ private:
     void fail(const char*) noexcept;
     void failLaunch(const char*) noexcept;
     bool connect(const char* jwt,const char* device,CloudView& target) noexcept;
-    bool allocationEndpoint(const char* jwt,const char* device,CloudView& target) noexcept;
     bool fetchPage(CatalogSource source,unsigned page,const char* jwt,const char* device) noexcept;
     void start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels) noexcept;
     bool parseSession(const Response&) noexcept;
@@ -74,10 +69,8 @@ private:
     Request request_;void* context_;
     TrustEndpoint trust_;
     CloudView view_{},library_{};Session session_{};
-    NetworkView network_{};
     StreamSettings allocationSettings_{};
     char base_[512]{},vpc_[128]{},search_[128]{};
-    char allocationBase_[512]{},regionOrigins_[maxRegions][272]{};
     char controlBase_[512]{};
     RemoteSeat remote_{};
     char remoteIds_[32][128]{};

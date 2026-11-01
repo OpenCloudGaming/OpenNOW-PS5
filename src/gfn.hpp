@@ -15,7 +15,6 @@ struct View {
     unsigned expiresIn = 0;
     bool profileVerified = false;
     bool sessionSaved = false;
-    bool canSignOut = false;
 };
 struct Response {
     long status = 0;

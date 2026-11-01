@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "settings_file.hpp"
 #include <cassert>
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -73,7 +72,7 @@ Bytes version3(const settingsFile::Saved& saved) {
     return bytes;
 }
 
-Bytes version4(const settingsFile::Saved& saved) {
+Bytes current(const settingsFile::Saved& saved) {
     auto bytes=version3(saved);
     bytes.resize(48);
     set32(bytes,4,4);
@@ -86,18 +85,8 @@ Bytes version4(const settingsFile::Saved& saved) {
     return bytes;
 }
 
-Bytes current(const settingsFile::Saved& saved) {
-    auto bytes=version4(saved);
-    bytes.resize(68);
-    bytes.resize(68+regionNameSize);
-    set32(bytes,4,5);
-    std::memcpy(bytes.data()+68,saved.region,std::strlen(saved.region));
-    append32(bytes,0);sign(bytes);
-    return bytes;
-}
-
 void assertDefault(const settingsFile::Saved& saved) {
-    assert(!saved.hasSettings&&saved.settings==StreamSettings{}&&saved.artworkCache&&!*saved.region);
+    assert(!saved.hasSettings&&saved.settings==StreamSettings{}&&saved.artworkCache);
 }
 
 void assertCorrupt(const std::string& path,const Bytes& bytes) {
@@ -113,9 +102,8 @@ void assertRoundtrip(const std::string& path,const settingsFile::Saved& expected
     settingsFile::Saved saved;
     assert(settingsFile::load(path.c_str(),saved)==settingsFile::Status::loaded);
     assert(saved.hasSettings==expected.hasSettings&&saved.settings==expected.settings&&saved.artworkCache==expected.artworkCache);
-    assert(!std::strcmp(saved.region,expected.region));
     struct stat info{};
-    assert(::stat(path.c_str(),&info)==0&&(info.st_mode&0777)==0600&&info.st_size==200);
+    assert(::stat(path.c_str(),&info)==0&&(info.st_mode&0777)==0600&&info.st_size==72);
     assert(::lstat((path+".tmp").c_str(),&info)==-1&&errno==ENOENT);
 }
 }
@@ -201,13 +189,11 @@ int main() {
     const settingsFile::Saved custom{true,{1600,900,45,42000,VideoMode::hevcMain10SdrHardware,QualityMode::clarity,NetworkPolicy::fixed},false};
     const auto v2=version2(custom);
     const auto v3=version3(custom);
-    const auto v4=version4(custom);
-    const auto v5=current(custom);
-    for(const auto& bytes:{v2,v3,v4}) {
+    const auto v4=current(custom);
+    for(const auto& bytes:{v2,v3}) {
         writeRaw(path,bytes);
         assert(settingsFile::load(path.c_str(),saved)==settingsFile::Status::loaded);
         assert(saved.settings==custom.settings);
-        assert(!*saved.region);
         assertRoundtrip(path,saved);
     }
     for(int left:{0,5,50})for(int right:{0,5,50})for(int intensity:{0,100})for(int sensitivity:{10,100,300})for(bool persist:{false,true}) {
@@ -223,7 +209,7 @@ int main() {
                     {48,0xffffffffU},{52,0xffffffffU},{56,0xffffffffU},{60,0xffffffffU},{64,0xffffffffU}}) {
         auto bytes=v4;set32(bytes,field.first,field.second);sign(bytes);assertCorrupt(path,bytes);
     }
-    for(const auto& valid:{v1,v2,v3,v4,v5}) {
+    for(const auto& valid:{v1,v2,v3,v4}) {
         for(std::size_t size=0;size<valid.size();++size)
             assertCorrupt(path,Bytes(valid.begin(),valid.begin()+size));
         auto bytes=valid;
@@ -240,13 +226,13 @@ int main() {
         bytes[0]='X';
         sign(bytes);
         assertCorrupt(path,bytes);
-        for(auto version:{0U,6U,0xffffffffU}) {
+        for(auto version:{0U,5U,0xffffffffU}) {
             bytes=valid;
             set32(bytes,4,version);
             sign(bytes);
             assertCorrupt(path,bytes);
         }
-        for(auto version:{1U,2U,3U,4U,5U}) {
+        for(auto version:{1U,2U,3U,4U}) {
             if(version==valid[4])continue;
             bytes=valid;
             set32(bytes,4,version);
@@ -298,19 +284,6 @@ int main() {
             sign(bytes);
             assertCorrupt(path,bytes);
         }
-
-    for(const char* name:{"","EU-WEST","NP-FRK-06","us_east"}) {
-        auto preferred=custom;
-        std::snprintf(preferred.region,sizeof(preferred.region),"%s",name);
-        assertRoundtrip(path,preferred);
-    }
-    for(const char* name:{"https://example.com/","EU WEST","../west"}) {
-        auto bytes=v5;
-        std::memcpy(bytes.data()+68,name,std::strlen(name));sign(bytes);assertCorrupt(path,bytes);
-        auto invalid=custom;std::snprintf(invalid.region,sizeof(invalid.region),"%s",name);
-        assert(settingsFile::save(path.c_str(),invalid)==EINVAL);
-    }
-    {auto bytes=v5;std::fill(bytes.begin()+68,bytes.end()-4,'A');sign(bytes);assertCorrupt(path,bytes);}
 
     auto invalidNetwork=StreamSettings{};
     invalidNetwork.mode=VideoMode::h264Hardware;
@@ -393,5 +366,5 @@ int main() {
     assert(readRaw(account)==Bytes({'t','o','k','e','n'}));
     assert(::unlink(account.c_str())==0);
     assert(::rmdir(root)==0);
-    std::puts("V1-V4 migration, V5 region preferences, corruption, atomic saves and account isolation passed");
+    std::puts("V1-V3 migration, V4 input/persistence settings, corruption, atomic saves and account isolation passed");
 }

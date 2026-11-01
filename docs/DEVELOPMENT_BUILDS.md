@@ -4,17 +4,11 @@ These notes describe the Open Cloud Gaming development history. Public release t
 
 ## Launch and session recovery
 
-Current development fixes issues #22 and #23. While saved NVIDIA login restoration is retrying, Circle signs out and removes the saved credentials; the footer shows the same action. Circle still closes the app from the ordinary sign-in screen.
-
-Automatic startup recovery runs only when this account has a valid locally saved session profile. A fresh login can browse and launch without a scan of every cloud region. Session conflicts and ambiguous launch responses still require recovery before another launch. On a launch/recovery error, Circle returns to games without repeating the network check; Cross retries recovery even if no game has been launched yet. A game retry performs any required recovery before attempting another launch.
-
 Development build `00.002.036` preserves a stream failure message after cleanup so you can retry from the catalog. If cleanup fails, use Options + touchpad to retry **STOP SESSION** before starting another game. While the app remains open, it retains the session for another cleanup attempt. Explicitly closing the app attempts cleanup but still exits if the network or credentials prevent it; the remote session may remain active.
 
 Development build `00.002.037` removes the PS5-only age dialog and follows [upstream OpenNOW's launch request](https://github.com/OpenCloudGaming/OpenNOW/blob/bee18c118dbc89f42319436dcdb172d5b9e15e0c/native/opennow-core/src/cloudmatch.rs#L1511), which sends the fixed compatibility value `userAge: 25`. This is not your age or a change to your NVIDIA account. The app no longer reads or writes `launch-age.txt`; an existing file is left untouched.
 
 ## Signaling and endpoint selection
-
-Current development restores automatic/manual region selection in **Settings → Network**, using the region identifiers and HTTPS endpoints from NVIDIA's server information. The V5 settings record preserves the preference alongside stream and artwork settings; V1–V4 files migrate to Automatic. Manual-region failures are reported without silently falling back to a different region. Launch and network-test requests use the selected endpoint, while polling, resume and cleanup continue to use the session's own control endpoint. The UI distinguishes the regional endpoint from the media server reported by the session. No region RTT ranking or end-to-end latency claim is made.
 
 Development build `00.002.038` aligns signaling with OpenNOW's Android native branch. Relative signaling paths use secure WebSocket port 443, separate from the media port; explicit `wss://` endpoints retain their own port. The client sends Android's browser User-Agent, accepts text and binary signaling messages, preserves public ICE candidates, and sends local candidates with the negotiated BUNDLE MID. Failed upgrades report the HTTP status or failed validation check without exposing session IDs, headers, or response bodies. Certificate and WebSocket challenge validation remain enabled.
 

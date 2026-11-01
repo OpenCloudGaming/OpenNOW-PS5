@@ -19,7 +19,6 @@ std::uint64_t clockUs=1000000;
 std::chrono::steady_clock::time_point deadline;
 std::atomic_bool verified{false};
 bool seed=true,startedSignIn=false,escaped=false,stopped=false;
-const char* allocationOrigin() {return scenario==0?"https://east.geforcenow.com/":"https://test.geforcenow.com/";}
 const char* mapPath(const char* path,std::string& out) {
     if(!std::strcmp(path,OPENNOW_LEGACY_ACCOUNT_PATH)){out=testRoot+"/legacy-missing";return out.c_str();}
     if(!std::strcmp(path,"/download0")){out=testRoot;return out.c_str();}
@@ -113,7 +112,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         ++catalogs;assert((escaped||scenario==6)&&!forwardLaunchMode.load());
         return reply(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[]}}})");
     }
-    if(std::string(url)==std::string(allocationOrigin())+"v2/nettestsession") {
+    if(!std::strcmp(url,"https://test.geforcenow.com/v2/nettestsession")) {
         assert(!std::strcmp(method,"POST")&&lookups==1&&!catalogs&&!launches);
         ++networkTests;
         return reply(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"fixture-net"}})");
@@ -130,7 +129,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         static std::string response=std::string(R"({"requestStatus":{"statusCode":1},"session":)")+existingSeat+"}";
         return reply(response.c_str());
     }
-    if(!std::strcmp(method,"POST")&&std::string(url)==std::string(allocationOrigin())+"v2/session?keyboardLayout=en-US_qwerty&languageCode=en_US") {
+    if(!std::strcmp(method,"POST")&&!std::strcmp(url,"https://test.geforcenow.com/v2/session?keyboardLayout=en-US_qwerty&languageCode=en_US")) {
         ++launches;assert(lookups==1&&!catalogs);
         auto* root=cJSON_Parse(body);assert(root);
         const auto* request=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
@@ -141,7 +140,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         if(scenario==5)return reply(R"({"requestStatus":{"statusCode":11},"otherUserSessions":[{"sessionId":"fixture-existing","status":2,"sessionRequestData":{"appId":43}}]})",403);
         return reply(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-new","status":0}})");
     }
-    assert(!std::strcmp(method,"DELETE")&&std::string(url)==std::string(allocationOrigin())+"v2/session/fixture-new");
+    assert(!std::strcmp(method,"DELETE")&&!std::strcmp(url,"https://test.geforcenow.com/v2/session/fixture-new"));
     ++deletes;return reply("{}");
 }
 }
@@ -149,9 +148,7 @@ static void runScenario(unsigned value) {
     scenario=value;
     char root[]="/tmp/opennow-forward-worker-XXXXXX";assert(mkdtemp(root));testRoot=root;
     auto settings=opennow::settingsFor(StreamProfile::quality);settings.bitrate_kbps=20000;
-    opennow::settingsFile::Saved saved{true,settings,true};
-    if(scenario==0)std::snprintf(saved.region,sizeof(saved.region),"east");
-    assert(!opennow::settingsFile::save(OPENNOW_SETTINGS_PATH,saved));
+    assert(!opennow::settingsFile::save(OPENNOW_SETTINGS_PATH,{true,settings,true}));
     opennow::Http http;activeHttp=&http;
     if(scenario!=2) {
         opennow::Login login(opennow::Http::request,&http,OPENNOW_ACCOUNT_PATH);
@@ -170,7 +167,7 @@ static void runScenario(unsigned value) {
     if(scenario==4)assert(lookups==1&&!launches&&catalogs==2);
     if(scenario==3||scenario==4)assert(!sessionLists&&!networkTests&&!deletes);
     if(scenario==5)assert(lookups==1&&launches==1&&networkTests==1&&catalogs==2&&!publishedSession&&!sessionLists&&!deletes);
-    if(scenario==6)assert(!lookups&&!launches&&!networkTests&&catalogs==2&&!sessionLists&&!deletes);
+    if(scenario==6)assert(!lookups&&!launches&&!networkTests&&catalogs==2&&sessionLists==3&&!deletes);
     assert(std::filesystem::exists(testRoot+"/account.bin"));
     assert(!std::filesystem::exists(testRoot+"/session.bin"));
     std::filesystem::remove_all(testRoot);

@@ -25,7 +25,7 @@ done
 scenes=(signin-idle signin-requesting signin-code signin-failed library library-art-loading library-loading library-scanning library-empty library-error
     library-page-error browse browse-row2 browse-long browse-loading-more search detail detail-hardware detail-action tile-progress tile-success tile-failure settings
     settings-stream settings-stream-custom settings-stream-software settings-stream-editor settings-stream-unqualified settings-stream-fixed
-    settings-save-error settings-display settings-display-negotiated settings-controller settings-cache settings-cache-clear settings-cache-off settings-account settings-signout settings-about settings-network settings-network-error starting
+    settings-save-error settings-display settings-display-negotiated settings-controller settings-cache settings-cache-clear settings-cache-off settings-account settings-signout settings-about starting
     queued connecting keyboard keyboard-modifiers keyboard-waiting overlay-launcher overlay-keyboard overlay-keyboard-only overlay-waiting cleanup-failed stream-ended launch-failed)
 for scene in "${scenes[@]}"; do
     rm -rf build/preview-cache

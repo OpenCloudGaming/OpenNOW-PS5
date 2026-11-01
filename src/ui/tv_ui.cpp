@@ -1132,31 +1132,6 @@ void aboutPane(Canvas& c, const Model& m) {
     rowText(c,rowsX,y,84,"Unofficial client","Not affiliated with NVIDIA or Sony. GeForce NOW is a trademark of NVIDIA.");
 }
 
-void networkPane(Canvas& c, const Model& m) {
-    static const NetworkView empty;
-    const auto& n=m.network?*m.network:empty;
-    float y=rowsTop;
-    rowFrame(c,m,rowsX,y,rowsW,90,m.settingsContent&&m.settingsRow==0);
-    rowText(c,rowsX,y,90,"Server region","Left / right to choose. Saved for the next session.");
-    valuePill(c,rowsX+rowsW-22,y+45,*n.preferred?n.preferred:"Automatic (NVIDIA)",false);
-    y+=94;
-    rowFrame(c,m,rowsX,y,rowsW,84,m.settingsContent&&m.settingsRow==1);
-    rowText(c,rowsX,y,84,"Refresh regions","Reload the regions currently offered by NVIDIA.");
-    valuePill(c,rowsX+rowsW-22,y+42,"Refresh",false);
-    y+=96;
-    eyebrow(c,rowsX+22,y+16,"Regional endpoint",muted,13);
-    fitted(c,Face::mono,18,rowsX+22,y+47,*n.endpoint?n.endpoint:"Not connected",rowsW-44,face);
-    y+=86;
-    eyebrow(c,rowsX+22,y+16,"Last allocated streaming server",muted,13);
-    fitted(c,Face::mono,18,rowsX+22,y+47,*n.server?n.server:"Not allocated yet",rowsW-44,face);
-    y+=86;
-    drawWrapped(c,Face::semibold,17,rowsX+22,y,26,"Automatic uses NVIDIA's routing. A resumed session keeps its existing server. The allocated server can differ from the regional endpoint; no latency measurement is available here.",rowsW-44,3,muted);
-    y+=98;
-    if(n.saveError)label(c,Face::semibold,17,rowsX+22,y,"Could not save the region. The previous preference is still in use.",coral);
-    else if(*n.error)drawWrapped(c,Face::semibold,17,rowsX+22,y,26,n.error,rowsW-44,3,coral);
-    else if(!n.count)label(c,Face::semibold,17,rowsX+22,y,"No manual regions available. Try Refresh.",yellow);
-}
-
 void paneIcon(Canvas& c, SettingsPane pane, float x, float cy) {
     constexpr float s=32;
     const float cx=x+s/2;
@@ -1179,11 +1154,10 @@ void paneIcon(Canvas& c, SettingsPane pane, float x, float cy) {
     }
     case SettingsPane::account: c.disc(cx,cy-3.5f,4,faceText);c.roundRect(cx-7,cy+2,14,7,3.5f,faceText);break;
     case SettingsPane::about: labelCenter(c,Face::black,18,cx,cy,"i",faceText);break;
-    case SettingsPane::network: c.ring(cx,cy,10,2,faceText);c.line(cx-10,cy,cx+10,cy,2,faceText);c.line(cx,cy-10,cx,cy+10,2,faceText);break;
     }
 }
 const char* paneName(SettingsPane pane) {
-    constexpr const char* names[]={"Streaming","Display & audio","Input & controllers","Cover art & cache","Account","About","Network"};
+    constexpr const char* names[]={"Streaming","Display & audio","Input & controllers","Cover art & cache","Account","About"};
     return names[static_cast<unsigned>(pane)];
 }
 bool settingsDialog(const Model& m) {return m.edit.open()||m.confirmClear||m.confirmFixed||m.confirmSignOut;}
@@ -1449,7 +1423,6 @@ void settings(Canvas& c, const Model& m) {
     case SettingsPane::cache: cachePane(c,m);break;
     case SettingsPane::account: accountPane(c,m);break;
     case SettingsPane::about: aboutPane(c,m);break;
-    case SettingsPane::network: networkPane(c,m);break;
     }
     const bool dialog=settingsDialog(m);
     const unsigned rows=settingsRows(m.pane);
@@ -1470,9 +1443,6 @@ void settings(Canvas& c, const Model& m) {
             if(row==StreamRow::resolution||row==StreamRow::fps||row==StreamRow::bitrate||row==StreamRow::reset)
                 right[r++]={Glyph::cross,row==StreamRow::reset?"Reset":"Edit"};
         }
-    } else if(m.pane==SettingsPane::network) {
-        left[l++]={Glyph::circle,"Sections"};
-        right[r++]=m.settingsRow==0?Hint{Glyph::dpad,"Region"}:Hint{Glyph::cross,"Refresh"};
     } else {
         left[l++]={Glyph::circle,"Sections"};
         right[r++]={Glyph::cross,"Select"};
@@ -1543,7 +1513,7 @@ void signIn(Canvas& c, const Model& m) {
     }
     labelCenter(c,Face::black,22,1520,708,"Scan with your phone",face);
     labelCenter(c,Face::semibold,16,1520,754,waiting?"Opens NVIDIA sign-in with this code filled in":"A QR code appears after sign-in starts",muted);
-    const Hint left[]={v.canSignOut?Hint{Glyph::circle,"Sign out"}:closeAppHint};
+    const Hint left[]={closeAppHint};
     const Hint right[]={{Glyph::cross,failed?"Try again":"Sign in"}};
     chrome(c,m,"Welcome to OpenNOW",false,left,1,right,waiting||requesting?0:1);
 }
@@ -1639,12 +1609,6 @@ void progress(Canvas& c, const Model& m) {
     const bool dial=queue||setup;
     fitted(c,Face::black,80,120,293,head,dial?1060:1680,face,-0.02f);
     drawWrapped(c,Face::semibold,22,120,356,33,text,860,3,muted);
-    if(m.network) {
-        char server[512];
-        std::snprintf(server,sizeof(server),"%s: %s",*m.network->server?"Streaming server":"Regional endpoint",
-            *m.network->server?m.network->server:*m.network->endpoint?m.network->endpoint:"Waiting for NVIDIA");
-        fitted(c,Face::mono,16,120,485,server,1000,muted);
-    }
     const int active=connecting?3:queue?1:queued?2:0;
     const float rail=follow(m,motionKey(railAnim),static_cast<float>(active),12,0.002f);
     for(int i=0;i<3;++i) {
@@ -1802,11 +1766,6 @@ void renderOverlay(Canvas& c, const Overlay& o) noexcept {
     } else items[count++]={Glyph::circle,o.launcher?"Back to mouse":"Close"};
     items[count++]=o.launcher?Hint{Glyph::options,"Exit",Glyph::r3}:Hint{Glyph::options,"Close",Glyph::triangle};
     hintRow(c,items,count,x+w-28-hintRowWidth(items,count),cy);
-    if(o.server&&*o.server) {
-        c.roundRect(x,y+h+12,680,44,22,shell);
-        char text[192];std::snprintf(text,sizeof(text),"Server: %s",o.server);
-        fitted(c,Face::mono,15,x+22,y+h+34,text,636,muted);
-    }
     if(!k.open)return;
     const float ph=500, py=1080-40-ph;
     c.roundRect(x,py,w,ph,36,shell);
@@ -1851,7 +1810,6 @@ unsigned settingsRows(SettingsPane pane) noexcept {
     case SettingsPane::stream: return static_cast<unsigned>(StreamRow::count);
     case SettingsPane::controller: return static_cast<unsigned>(ControllerRow::count);
     case SettingsPane::cache: return 2;
-    case SettingsPane::network: return 2;
     case SettingsPane::account: return 1;
     case SettingsPane::display: case SettingsPane::about: return 0;
     }
