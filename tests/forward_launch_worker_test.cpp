@@ -15,11 +15,14 @@ namespace {
 std::string testRoot;
 unsigned scenario=0,lookups=0,catalogs=0,launches=0,networkTests=0,sessionLists=0,deletes=0;
 unsigned removalAttempts=0,signOutStage=0,recoveryInfos=0;
+unsigned regionStage=0;
+bool manualRegionChecked=false;
 std::atomic_uint refreshes{0};
 std::uint64_t clockUs=1000000;
 std::chrono::steady_clock::time_point deadline;
 std::atomic_bool verified{false};
 bool seed=true,startedSignIn=false,escaped=false,stopped=false;
+const char* allocationOrigin() {return scenario==0?"https://east.geforcenow.com/":"https://test.geforcenow.com/";}
 const char* mapPath(const char* path,std::string& out) {
     if(!std::strcmp(path,OPENNOW_LEGACY_ACCOUNT_PATH)){out=testRoot+"/legacy-missing";return out.c_str();}
     if(!std::strcmp(path,"/download0")){out=testRoot;return out.c_str();}
@@ -96,7 +99,18 @@ int sceKernelUsleep(unsigned) {
     if(scenario==9&&sessionLists==3) {
         assert(recoveryInfos==1&&!publishedCloud.launchError&&!publishedSession&&launches==1);command.store(10);
     }
-    if(scenario>=3&&catalogs==2)command.store(10);
+    if(scenario==10&&catalogs==2&&regionStage==0) {
+        regionStage=1;Request request;request.regionRequest=42;
+        std::snprintf(request.region,sizeof(request.region),"east");submit(20,request);
+    } else if(scenario==10&&publishedNetwork.selectionRequest==42) {
+        opennow::settingsFile::Saved saved;
+        assert(opennow::settingsFile::load(OPENNOW_SETTINGS_PATH,saved)==opennow::settingsFile::Status::loaded);
+        assert(!std::strcmp(saved.region,"east")&&!std::strcmp(publishedNetwork.preferred,"east"));
+        assert(!publishedNetwork.saveError&&manualRegionChecked&&!std::strcmp(publishedNetwork.endpoint,"https://east.geforcenow.com/"));
+        assert(saved.settings.bitrate_kbps==20000&&saved.artworkCache);
+        regionStage=2;command.store(10);
+    }
+    if(scenario>=3&&scenario!=10&&catalogs==2)command.store(10);
     return 0;
 }
 }
@@ -130,17 +144,21 @@ Response Http::request(void*,const char* method,const char* url,const char* body
     }
     assert(bearer&&!std::strcmp(bearer,"fixture-cloud")&&device&&std::strlen(device)==36);
     assert(std::strcmp(method,"PUT")&&"Forwarder escape must not resume another cloud game");
-    if(std::strstr(url,"serverInfo")){if(scenario==9&&escaped)++recoveryInfos;return reply(serverInfo);}
+    if(std::strstr(url,"serverInfo")){
+        if(scenario==9&&escaped)++recoveryInfos;
+        if(scenario==10&&!std::strcmp(url,"https://east.geforcenow.com/v2/serverInfo"))manualRegionChecked=true;
+        return reply(serverInfo);
+    }
     if(std::strstr(url,"graphql")) {
         if(std::strstr(body,"variantIds")) {
             ++lookups;assert(!catalogs&&forwardLaunchMode.load());
             if(scenario==4)return reply(R"({"data":{"apps":{"items":[]}}})");
             return reply(R"({"data":{"apps":{"items":[{"title":"Fixture","gfn":{"playabilityState":"PLAYABLE"},"variants":[{"id":"42","appStore":"XBOX","gfn":{"status":"AVAILABLE","library":{"status":"MANUAL"}}}]}]}}})");
         }
-        ++catalogs;assert((escaped||scenario==6)&&!forwardLaunchMode.load());
+        ++catalogs;assert((escaped||scenario==6||scenario==10)&&!forwardLaunchMode.load());
         return reply(R"({"data":{"apps":{"pageInfo":{"hasNextPage":false,"endCursor":""},"items":[]}}})");
     }
-    if(!std::strcmp(url,"https://test.geforcenow.com/v2/nettestsession")) {
+    if(std::string(url)==std::string(allocationOrigin())+"v2/nettestsession") {
         assert(!std::strcmp(method,"POST")&&lookups==1&&!catalogs&&!launches);
         ++networkTests;
         return reply(R"({"requestStatus":{"statusCode":1},"netTestSession":{"sessionId":"fixture-net"}})");
@@ -157,7 +175,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         static std::string response=std::string(R"({"requestStatus":{"statusCode":1},"session":)")+existingSeat+"}";
         return reply(response.c_str());
     }
-    if(!std::strcmp(method,"POST")&&!std::strcmp(url,"https://test.geforcenow.com/v2/session?keyboardLayout=en-US_qwerty&languageCode=en_US")) {
+    if(!std::strcmp(method,"POST")&&std::string(url)==std::string(allocationOrigin())+"v2/session?keyboardLayout=en-US_qwerty&languageCode=en_US") {
         ++launches;assert(lookups==1&&!catalogs);
         auto* root=cJSON_Parse(body);assert(root);
         const auto* request=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
@@ -169,7 +187,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         if(scenario==9)return reply("{}",500);
         return reply(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-new","status":0}})");
     }
-    assert(!std::strcmp(method,"DELETE")&&!std::strcmp(url,"https://test.geforcenow.com/v2/session/fixture-new"));
+    assert(!std::strcmp(method,"DELETE")&&std::string(url)==std::string(allocationOrigin())+"v2/session/fixture-new");
     ++deletes;return reply("{}",scenario==7||scenario==8?401:200);
 }
 }
@@ -177,7 +195,9 @@ static void runScenario(unsigned value) {
     scenario=value;
     char root[]="/tmp/opennow-forward-worker-XXXXXX";assert(mkdtemp(root));testRoot=root;
     auto settings=opennow::settingsFor(StreamProfile::quality);settings.bitrate_kbps=20000;
-    assert(!opennow::settingsFile::save(OPENNOW_SETTINGS_PATH,{true,settings,true}));
+    opennow::settingsFile::Saved saved{true,settings,true};
+    if(scenario==0)std::snprintf(saved.region,sizeof(saved.region),"east");
+    assert(!opennow::settingsFile::save(OPENNOW_SETTINGS_PATH,saved));
     opennow::Http http;activeHttp=&http;
     if(scenario!=2) {
         opennow::Login login(opennow::Http::request,&http,OPENNOW_ACCOUNT_PATH);
@@ -188,7 +208,7 @@ static void runScenario(unsigned value) {
     deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
     const char* args[]={"--gfn-app-id","42","--store","XBOX"};
     launchArgs=opennow::forwarder::parseLaunchArgs(4,args);forwardLaunchMode.store(true);
-    if(scenario==6){launchArgs={};forwardLaunchMode.store(false);}
+    if(scenario==6||scenario==10){launchArgs={};forwardLaunchMode.store(false);}
     worker(nullptr);assert(stopped);
     if(scenario<=2)assert(launches==1&&lookups==1&&networkTests==1&&!catalogs&&!sessionLists&&deletes==1&&publishedLaunch==settings);
     if(scenario==1)assert(refreshes==3);
@@ -200,12 +220,13 @@ static void runScenario(unsigned value) {
     if(scenario==7)assert(launches==1&&lookups==1&&networkTests==1&&deletes==1&&!publishedSession);
     if(scenario==8)assert(signOutStage==6&&deletes==1&&removalAttempts==4);
     if(scenario==9)assert(launches==1&&lookups==1&&networkTests==1&&sessionLists==3&&recoveryInfos==1&&!deletes);
+    if(scenario==10)assert(regionStage==2&&manualRegionChecked&&catalogs==2&&!lookups&&!launches&&!networkTests&&!sessionLists&&!deletes);
     assert(std::filesystem::exists(testRoot+"/account.bin")== (scenario!=7&&scenario!=8));
     assert(!std::filesystem::exists(testRoot+"/session.bin"));
     std::filesystem::remove_all(testRoot);
 }
 int main() {
-    for(unsigned scenario=0;scenario<10;++scenario) {
+    for(unsigned scenario=0;scenario<11;++scenario) {
         const pid_t child=fork();assert(child>=0);
         if(!child){runScenario(scenario);std::exit(0);}
         int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);

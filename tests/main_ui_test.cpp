@@ -93,9 +93,11 @@ void storeChecks() {
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded);
     assert(!file.hasSettings&&file.artworkCache&&file.settings==quality&&store.info.revision==1);
     const StreamSettings custom{1600,900,45,33000};
+    assert(store.region(path,"EU-WEST")==0);
     store.save(path,custom,available);
     assert(store.defaults==custom&&store.info.revision==2&&store.info.saved);
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&file.hasSettings&&file.settings==custom&&file.artworkCache);
+    assert(!std::strcmp(file.region,"EU-WEST"));
     StreamSettings invalid=custom;invalid.width=1601;
     store.save(path,invalid,available);
     StreamSettings hardware=custom;hardware.mode=opennow::VideoMode::h264Hardware;hardware.network=opennow::NetworkPolicy::fixed;
@@ -116,6 +118,8 @@ void storeChecks() {
     assert(!store.info.saveError);
     assert(store.defaults==quality&&store.info.revision==3&&!store.info.saved);
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&!file.hasSettings&&!file.artworkCache);
+    assert(!std::strcmp(file.region,"EU-WEST"));
+    assert(store.region(broken,"EU-CENTRAL")!=0&&!std::strcmp(store.saved.region,"EU-WEST"));
     writeV1(path,StreamProfile::smooth);
     store.load(path,quality,true,available);
     assert(store.info.saved&&!store.info.savedUnavailable&&store.defaults==smooth&&store.artworkSaved);
@@ -871,6 +875,52 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     press(PS5_PAD_BUTTON_CIRCLE);assert(take()==18&&http.cancelled);
     forwardLaunchMode.store(false);
     http.cancelled=false;published.canSignOut=false;
+    // Network controls submit identifiers and preserve unrelated stream drafts.
+    published.state=State::authenticated;section=Section::settings;
+    settingsPane=SettingsPane::network;settingsContent=true;settingsRow=0;
+    publishedNetwork.count=2;
+    std::snprintf(publishedNetwork.names[0],opennow::regionNameSize,"EU-WEST");
+    std::snprintf(publishedNetwork.names[1],opennow::regionNameSize,"EU-CENTRAL");
+    const auto networkDraft=draft;
+    Request firstRegion,secondRegion,lastRegion;
+    press(PS5_PAD_BUTTON_RIGHT);
+    assert(take(firstRegion)==20&&!std::strcmp(firstRegion.region,"EU-WEST"));
+    // No publication between presses: the second press must advance again.
+    press(PS5_PAD_BUTTON_RIGHT);
+    assert(take(secondRegion)==20&&!std::strcmp(secondRegion.region,"EU-CENTRAL"));
+    publishedNetwork.selectionRequest=firstRegion.regionRequest;publishedNetwork.saveError=EACCES;
+    testButtons=0;draw(canvas);assert(regionPending);
+    press(PS5_PAD_BUTTON_LEFT);
+    assert(take(lastRegion)==20&&!std::strcmp(lastRegion.region,"EU-WEST"));
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;publishedNetwork.saveError=0;
+    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"EU-WEST");
+    testButtons=0;draw(canvas);assert(!regionPending);
+    press(PS5_PAD_BUTTON_LEFT);
+    assert(take(lastRegion)==20&&!*lastRegion.region);
+    // A failure of the latest request rolls back to the published preference.
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;publishedNetwork.saveError=EACCES;
+    testButtons=0;draw(canvas);assert(!regionPending);
+    press(PS5_PAD_BUTTON_RIGHT);
+    assert(take(lastRegion)==20&&!std::strcmp(lastRegion.region,"EU-CENTRAL"));
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;publishedNetwork.saveError=0;
+    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"EU-CENTRAL");
+    testButtons=0;draw(canvas);assert(!regionPending);
+    // Superseding a queued selection cancels its optimistic display.
+    press(PS5_PAD_BUTTON_LEFT);assert(regionPending);
+    submit(16,{-1,-1,1,true,draft});
+    testButtons=0;draw(canvas);assert(!regionPending&&take()==16);
+    // A request already taken by the worker must still await its own result.
+    press(PS5_PAD_BUTTON_LEFT);assert(take(lastRegion)==20&&regionPending);
+    submit(16,{-1,-1,1,true,draft});
+    testButtons=0;draw(canvas);assert(regionPending&&take()==16);
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;
+    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"%s",lastRegion.region);
+    draw(canvas);assert(!regionPending);
+    assert(draft==networkDraft);
+    press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_CROSS);assert(take()==21);
+    press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent&&command.load()==0);
+    publishedNetwork={};section=Section::library;
+
     published.state=State::failed;publishedSession=true;
     assert(current()==Screen::signIn);
     press(PS5_PAD_BUTTON_CIRCLE);

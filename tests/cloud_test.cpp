@@ -10,7 +10,7 @@ using namespace opennow;
 static Response response(const char* s){return {200,const_cast<char*>(s),std::strlen(s),nullptr};}
 struct Mock {
  std::map<std::string,const char*> byCursor,listsByUrl,seatByUrl;
- std::map<std::string,long> listStatuses,seatStatuses;
+ std::map<std::string,long> listStatuses,seatStatuses,infoStatuses;
  unsigned graphql=0,posts=0,deletes=0,nettests=0,puts=0,lists=0,attempts=0;
  bool reject=false,stopError=false,pollError=false,rejectTrust=false;
  const char* poll=nullptr;std::string body,netBody,catalogBody,putBody,deleteUrl;
@@ -28,7 +28,7 @@ static Response request(void* p,const char* method,const char* url,const char* b
  auto& m=*static_cast<Mock*>(p);
  m.urls.emplace_back(url);
  if(std::strstr(url,"serviceUrls"))return response(R"({"gfnServiceInfo":{"gfnServiceEndpoints":[{"idpId":"PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg","streamingServiceUrl":"https://test.geforcenow.com/"}]}})");
- if(std::strstr(url,"serverInfo"))return response(m.serverInfo);
+ if(std::strstr(url,"serverInfo")){auto r=response(m.serverInfo);if(auto status=m.infoStatuses.find(url);status!=m.infoStatuses.end())r.status=status->second;return r;}
  if(std::strstr(url,"graphql")){m.catalogBody=body;++m.graphql;
   if(!m.byCursor.empty()){auto* root=cJSON_Parse(body);std::string cursor=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root,"variables"),"cursor")->valuestring;cJSON_Delete(root);
    auto found=m.byCursor.find(cursor);if(found==m.byCursor.end()){auto r=response("{}");r.status=500;return r;}return response(found->second);}
@@ -274,7 +274,111 @@ static void progressAndCleanupTests() {
  }
  mock.poll=R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"foreign-id","status":2}})";client.launch("fixture-jwt","fixture-device",1);client.tick("fixture-jwt","fixture-device",4);assert(client.view().state==CloudState::failed&&!std::strcmp(client.session().id,"fixture-id"));assert(client.stop("fixture-jwt","fixture-device"));
 }
+static void regionTests() {
+ Mock mock;
+ mock.serverInfo=R"({"requestStatus":{"statusCode":1,"serverId":"fixture-vpc"},"metaData":[{"key":"local-region","value":"west"},{"key":"gfn-regions","value":"west, east, west, invalid, private"},{"key":"west","value":"https://west.geforcenow.com/"},{"key":"east","value":"https://east.geforcenow.com/"},{"key":"invalid","value":"http://east.geforcenow.com/"},{"key":"private","value":"https://127.0.0.1/"}]})";
+ Cloud client(request,&mock,trust);
+ client.load("fixture-jwt","fixture-device");
+ assert(client.network().count==2&&!*client.network().preferred);
+ assert(!std::strcmp(client.network().endpoint,"https://test.geforcenow.com/"));
+ assert(!mock.lists&&!mock.posts&&!mock.nettests);
+ assert(client.selectRegion("east")&&!*client.network().endpoint);
+ assert(client.refreshRegions("fixture-jwt","fixture-device"));
+ assert(mock.urls.back()=="https://east.geforcenow.com/v2/serverInfo");
+ assert(!std::strcmp(client.network().endpoint,"https://east.geforcenow.com/"));
+ assert(mock.trusted.back()=="https://east.geforcenow.com/");
+ client.launch("fixture-jwt","fixture-device",1);
+ assert(mock.urls.back().starts_with("https://east.geforcenow.com/v2/session?"));
+ assert(!client.selectRegion("west")&&!client.refreshRegions("fixture-jwt","fixture-device"));
+ assert(!std::strcmp(client.network().preferred,"east"));
+ assert(client.stop("fixture-jwt","fixture-device"));
+ assert(mock.deleteUrl=="https://east.geforcenow.com/v2/session/fixture-id");
+ assert(client.selectRegion("missing"));
+ assert(!client.refreshRegions("fixture-jwt","fixture-device")&&*client.network().error&&!*client.network().endpoint);
+ const auto posts=mock.posts;
+ client.launchEntry(CatalogSource::browse,0,"fixture-jwt","fixture-device",2,StreamSettings{});
+ assert(mock.posts==posts); // Never fall back silently from an unavailable manual choice.
+ client.dismissLaunchError();
+ assert(client.selectRegion("west"));
+ mock.infoStatuses["https://west.geforcenow.com/v2/serverInfo"]=503;
+ assert(!client.refreshRegions("fixture-jwt","fixture-device")&&!*client.network().endpoint);
+ assert(client.selectRegion(""));
+ assert(client.refreshRegions("fixture-jwt","fixture-device"));
+ assert(!std::strcmp(client.network().endpoint,"https://test.geforcenow.com/"));
+ assert(client.view().state==CloudState::catalog&&!*client.network().error);
+ assert(!client.selectRegion("https://east.geforcenow.com/")&&!client.selectRegion("../west"));
+ assert(client.selectRegion("east"));mock.rejectTrust=true;
+ assert(!client.refreshRegions("fixture-jwt","fixture-device")&&!*client.network().endpoint);
+ mock.rejectTrust=false;assert(client.selectRegion(""));assert(client.refreshRegions("fixture-jwt","fixture-device"));
+ client.launch("fixture-jwt","fixture-device",3);
+ mock.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"wss://stream.geforcenow.com/nvst/","connectionInfo":[{"usage":2,"ip":"203.0.113.42","port":48010}]}})";
+ client.tick("fixture-jwt","fixture-device",6);
+ assert(!std::strcmp(client.network().server,"203.0.113.42:48010"));
+ assert(client.stop("fixture-jwt","fixture-device"));
+ assert(!std::strcmp(client.network().server,"203.0.113.42:48010"));
+ client.launch("fixture-jwt","fixture-device",7);assert(!*client.network().server);
+ mock.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"wss://stream.geforcenow.com/nvst/","connectionInfo":[{"usage":2,"ip":"[2001:db8::42]","port":48010}]}})";
+ client.tick("fixture-jwt","fixture-device",10);
+ assert(!std::strcmp(client.network().server,"[2001:db8::42]:48010"));
+ assert(client.stop("fixture-jwt","fixture-device"));
+ for(const char* preferred:{"missing","east"}) {
+  Mock recovery;recovery.serverInfo=mock.serverInfo;
+  recovery.infoStatuses["https://east.geforcenow.com/v2/serverInfo"]=503;
+  const auto seat=existingSeat(),listed=remoteList(seat),lookup=envelope(seat);
+  recovery.listsByUrl["https://west.geforcenow.com/v2/session"]=listed.c_str();recovery.lookup=lookup.c_str();
+  Cloud resumed(request,&recovery,trust);resumed.load("fixture-jwt","fixture-device");
+  assert(resumed.selectRegion(preferred));
+  Session retained;std::snprintf(retained.id,sizeof(retained.id),"fixture-id");
+  assert(resumed.recover("fixture-jwt","fixture-device",1,StreamSettings{},2,&retained)==RecoveryResult::pending);
+  assert(!std::strcmp(resumed.network().preferred,preferred)&&recovery.puts==1&&!recovery.posts);
+  assert(resumed.stop("fixture-jwt","fixture-device"));
+  assert(recovery.deleteUrl=="https://203.0.113.50/v2/session/fixture-id");
+  resumed.launch("fixture-jwt","fixture-device",2);
+  assert(!recovery.posts&&resumed.view().launchError&&*resumed.network().error);
+ }
+ {
+  Mock recovery;recovery.serverInfo=mock.serverInfo;
+  Cloud resumed(request,&recovery,trust);resumed.load("fixture-jwt","fixture-device");
+  assert(resumed.selectRegion("east"));
+  // Even an inconclusive global check must not override the next allocation's preference.
+  assert(resumed.recover("fixture-jwt","fixture-device",1,StreamSettings{})==RecoveryResult::failed);
+  recovery.serverInfo=R"({"requestStatus":{"statusCode":1},"metaData":[{"key":"gfn-regions","value":"west,east"},{"key":"west","value":"https://west.geforcenow.com/"},{"key":"east","value":"https://east.geforcenow.com/"}]})";
+  assert(resumed.recover("fixture-jwt","fixture-device",2,StreamSettings{})==RecoveryResult::none);
+  resumed.launch("fixture-jwt","fixture-device",3);
+  assert(recovery.urls.back().starts_with("https://east.geforcenow.com/v2/session?"));
+  assert(resumed.stop("fixture-jwt","fixture-device"));
+ }
+ for(bool catalogError:{false,true}) {
+  Mock browsing;Cloud independent(request,&browsing,trust);
+  independent.load("fixture-jwt","fixture-device");
+  independent.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  if(catalogError){browsing.catalog="{}";independent.load("fixture-jwt","fixture-device");}
+  const auto catalog=independent.view(),library=independent.library();
+  browsing.infoStatuses["https://test.geforcenow.com/v2/serverInfo"]=503;
+  assert(!independent.refreshRegions("fixture-jwt","fixture-device"));
+  assert(!std::memcmp(&catalog,&independent.view(),sizeof(catalog))&&!std::memcmp(&library,&independent.library(),sizeof(library)));
+  // Keep the discovery service down: browsing must still use its cached route.
+  browsing.catalog=nullptr;
+  const auto graphql=browsing.graphql;
+  const auto requests=browsing.urls.size();
+  independent.load("fixture-jwt","fixture-device","Fixture");
+  independent.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(independent.view().state==CloudState::catalog&&independent.library().state==CloudState::catalog);
+  assert(browsing.graphql==graphql+2&&browsing.urls.size()==requests+2);
+  const auto refreshedCatalog=independent.view(),refreshedLibrary=independent.library();
+  browsing.infoStatuses.clear();
+  assert(independent.refreshRegions("fixture-jwt","fixture-device"));
+  assert(!std::memcmp(&refreshedCatalog,&independent.view(),sizeof(catalog))&&!std::memcmp(&refreshedLibrary,&independent.library(),sizeof(library)));
+  assert(independent.selectRegion("missing")&&!independent.refreshRegions("fixture-jwt","fixture-device"));
+  browsing.catalog=nullptr;
+  independent.load("fixture-jwt","fixture-device","Fixture");
+  independent.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(independent.view().state==CloudState::catalog&&independent.library().state==CloudState::catalog);
+  assert(!std::strcmp(independent.network().preferred,"missing")&&*independent.network().error);
+ }
+}
 int main(){
+ regionTests();
  requestParityTests();conflictTests();retainedProfileTests();acceptedProfileTests();recoveryTests();progressAndCleanupTests();
  {
   Mock rejectedStop;Cloud client(request,&rejectedStop,trust);client.load("fixture-jwt","fixture-device");
