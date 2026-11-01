@@ -62,7 +62,7 @@ public:
 private:
     void fail(const char*) noexcept;
     void failLaunch(const char*) noexcept;
-    bool connect(const char* jwt,const char* device,CloudView& target) noexcept;
+    bool connect(const char* jwt,const char* device,CloudView& target,bool refresh=false) noexcept;
     bool allocationEndpoint(const char* jwt,const char* device,CloudView& target) noexcept;
     bool fetchPage(CatalogSource source,unsigned page,const char* jwt,const char* device) noexcept;
     void start(const Game& game,const char* jwt,const char* device,std::uint64_t now,const StreamSettings& settings,unsigned audioChannels) noexcept;

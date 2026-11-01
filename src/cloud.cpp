@@ -311,43 +311,46 @@ bool Cloud::selectRegion(const char* name) noexcept {
 }
 bool Cloud::refreshRegions(const char* jwt,const char* device) noexcept {
     if(*session_.id||view_.state==CloudState::starting||view_.state==CloudState::queued||view_.state==CloudState::ready)return false;
-    base_[0]=allocationBase_[0]=0;
+    allocationBase_[0]=0;
     // Settings refresh reports errors only in network_, preserving catalog and
     // launch errors, selection, pagination and messages.
     CloudView status;
+    if(!connect(jwt,device,status,true))return false;
     return allocationEndpoint(jwt,device,status);
 }
-bool Cloud::connect(const char* jwt,const char* device,CloudView& target) noexcept {
-    const auto failTarget=[&](const char* text){base_[0]=allocationBase_[0]=network_.endpoint[0]=0;copy(network_.error,text);target.state=CloudState::failed;std::snprintf(target.message,sizeof(target.message),"%s",text);return false;};
-    if(*base_)return true;
-    network_.count=0;network_.error[0]=0;
+bool Cloud::connect(const char* jwt,const char* device,CloudView& target,bool refresh) noexcept {
+    const auto failTarget=[&](const char* text){network_.endpoint[0]=0;copy(network_.error,text);target.state=CloudState::failed;std::snprintf(target.message,sizeof(target.message),"%s",text);return false;};
+    if(*base_&&!refresh)return true;
+    // Publish discovery atomically: an unsuccessful settings refresh must not
+    // discard the last usable catalog route or its VPC and region metadata.
+    char discoveredBase[sizeof(base_)]{},discoveredVpc[sizeof(vpc_)]{};
+    RegionList regions;
     auto r=request_(context_,"GET","https://pcs.geforcenow.com/v1/serviceUrls",nullptr,nullptr,nullptr);
     if(r.error)return failTarget(r.error);
     {
         Json j(r);
         const cJSON* entry;cJSON_ArrayForEach(entry,obj(obj(j.p,"gfnServiceInfo"),"gfnServiceEndpoints")) {
             if(!std::strcmp(str(entry,"idpId"),"PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg")) {
-                if(trustedCloudUrl(str(entry,"streamingServiceUrl")))copy(base_,str(entry,"streamingServiceUrl"));
+                if(trustedCloudUrl(str(entry,"streamingServiceUrl")))copy(discoveredBase,str(entry,"streamingServiceUrl"));
                 break;
             }
         }
     }
-    if(!*base_)return failTarget("NVIDIA streaming endpoint unavailable");
-    auto n=std::strlen(base_);if(base_[n-1]!='/'&&n+1<sizeof(base_)){base_[n]='/';base_[n+1]=0;}
-    char url[768];std::snprintf(url,sizeof(url),"%sv2/serverInfo",base_);
+    if(!*discoveredBase)return failTarget("NVIDIA streaming endpoint unavailable");
+    auto n=std::strlen(discoveredBase);if(discoveredBase[n-1]!='/'&&n+1<sizeof(discoveredBase)){discoveredBase[n]='/';discoveredBase[n+1]=0;}
+    char url[768];std::snprintf(url,sizeof(url),"%sv2/serverInfo",discoveredBase);
     r=request_(context_,"GET",url,nullptr,jwt,device);
-    if(r.error){base_[0]=0;return failTarget(r.error);}
-    if(r.status!=200){base_[0]=0;return failTarget("Unable to read NVIDIA server information");}
+    if(r.error)return failTarget(r.error);
+    if(r.status!=200)return failTarget("Unable to read NVIDIA server information");
     {
         Json info(r);
         if(!cJSON_IsObject(info.p)||(obj(info.p,"requestStatus")&&number(obj(info.p,"requestStatus"),"statusCode")!=1))return failTarget("Invalid NVIDIA server information");
-        if(!copy(vpc_,str(obj(info.p,"requestStatus"),"serverId"))||!*vpc_)copy(vpc_,"GFN-PC");
-        RegionList regions;parseRegions(info.p,regions);
-        for(unsigned i=0;i<regions.count;++i) {
-            copy(network_.names[network_.count],regions.names[i]);
-            copy(regionOrigins_[network_.count++],regions.origins[i]);
-        }
+        if(!copy(discoveredVpc,str(obj(info.p,"requestStatus"),"serverId"))||!*discoveredVpc)copy(discoveredVpc,"GFN-PC");
+        parseRegions(info.p,regions);
     }
+    copy(base_,discoveredBase);copy(vpc_,discoveredVpc);
+    network_.count=regions.count;network_.error[0]=0;
+    for(unsigned i=0;i<regions.count;++i){copy(network_.names[i],regions.names[i]);copy(regionOrigins_[i],regions.origins[i]);}
     if(!*network_.preferred)cloudControlOrigin(base_,network_.endpoint,sizeof(network_.endpoint));
     return true;
 }

@@ -98,8 +98,12 @@ bool backHeld=false;
 bool padConnected=false;
 char pendingSearch[128]{};
 char shownSearch[128]{};
-struct Request { int index=-1; int source=-1; int direction=1; bool hasSettings=false; opennow::StreamSettings settings{}; char region[opennow::regionNameSize]{}; };
+struct Request { int index=-1; int source=-1; int direction=1; bool hasSettings=false; opennow::StreamSettings settings{}; char region[opennow::regionNameSize]{}; unsigned regionRequest=0; };
 Request pendingRequest;
+char pendingRegion[opennow::regionNameSize]{};
+bool regionPending=false;
+unsigned regionSequence=0;
+unsigned supersededRegion=0; // Protected by viewMutex, like the command payload.
 struct Browser { unsigned focus=0; unsigned revision=~0U; int target=0; int pending=-1; char id[96]{}; };
 Browser browsers[2];
 Section section=Section::library;
@@ -163,7 +167,9 @@ void previewVideoFrame(Canvas& c) noexcept {
 }
 #endif
 void submit(int code,Request payload) noexcept {
-    pthread_mutex_lock(&viewMutex);pendingRequest=payload;command.store(code);pthread_mutex_unlock(&viewMutex);
+    pthread_mutex_lock(&viewMutex);
+    if(code!=20&&command.load()==20)supersededRegion=pendingRequest.regionRequest;
+    pendingRequest=payload;command.store(code);pthread_mutex_unlock(&viewMutex);
 }
 int takeCommand(Request& payload) noexcept {
     pthread_mutex_lock(&viewMutex);
@@ -311,6 +317,7 @@ void* worker(void*) {
     store.load(OPENNOW_SETTINGS_PATH,opennow::gpu::bestSettings(),artworkStart,opennow::gpu::settingsAvailable);
     cloud.selectRegion(store.saved.region);
     int regionSaveError=0;
+    unsigned regionAcknowledged=0;
     auto launchSettings=store.defaults;
     const auto recoverSession=[&](std::uint64_t now,bool savedOnly=false) {
         profileSaveFailed=false;
@@ -415,8 +422,9 @@ void* worker(void*) {
             }
             if(action==5&&!*cloud.session().id&&cloud.recoveryRequired())recoverSession(now/1000000);
             const bool idle=!*cloud.session().id;
-            if(action==20&&idle) {
-                if(cloud.selectRegion(request.region)) {
+            if(action==20) {
+                regionAcknowledged=request.regionRequest;
+                if(idle&&cloud.selectRegion(request.region)) {
                     regionSaveError=store.region(OPENNOW_SETTINGS_PATH,request.region);
                     if(regionSaveError)cloud.selectRegion(store.saved.region);
                     else cloud.refreshRegions(login.cloudToken(),id);
@@ -502,6 +510,7 @@ void* worker(void*) {
         }
         publishedDefaults=store.defaults;publishedSettings=store.info;
         publishedNetwork=cloud.network();publishedNetwork.saveError=regionSaveError;
+        publishedNetwork.selectionRequest=regionAcknowledged;
 #ifndef OPENNOW_HOST_PREVIEW
         if(stream.active()){publishedAudio.negotiated=media.audioChannels.load();publishedAudio.fallback=media.audioStereoFallbacks.load()>0;}
 #endif
@@ -644,6 +653,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     std::uint64_t rumbleSession=0;
     opennow::StreamSettings defaults,launch;opennow::ui::SettingsInfo settings;opennow::ui::AudioInfo audio;
     static opennow::NetworkView network;
+    unsigned cancelledRegion=0;
     static opennow::ui::HomeTile tile;
     static char tileStep[96];
     pthread_mutex_lock(&viewMutex);
@@ -653,8 +663,15 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     v=published;cv=publishedCloud;lv=publishedLibrary;streaming=publishedStream;inputReady=publishedInputReady;sessionOwned=publishedSession;
     streamFailed=publishedStreamFailure;defaults=publishedDefaults;launch=publishedLaunch;settings=publishedSettings;audio=publishedAudio;
     network=publishedNetwork;
+    cancelledRegion=supersededRegion;
     rumbleNotice=publishedRumble;rumbleSession=publishedStreamGeneration;
     pthread_mutex_unlock(&viewMutex);
+    if(v.state!=State::authenticated||streaming||sessionOwned)regionPending=false;
+    if(regionPending&&(network.selectionRequest==regionSequence||cancelledRegion==regionSequence))regionPending=false;
+    if(regionPending) {
+        std::snprintf(network.preferred,sizeof(network.preferred),"%s",pendingRegion);
+        network.saving=true;network.saveError=0;network.error[0]=0;
+    }
     if(settings.revision!=draftRevision){draft=defaults;draftRevision=settings.revision;adjusted=0;numberEdit={};confirmFixed=false;}
     const auto caps=streamCaps();
     opennow::StreamSettings choices[1+static_cast<unsigned>(StreamProfile::count)];
@@ -755,11 +772,11 @@ bool draw(ps5::demo::Canvas& c) noexcept {
             pthread_mutex_lock(&viewMutex);std::memcpy(pendingSearch,searchInput.text,sizeof(pendingSearch));pthread_mutex_unlock(&viewMutex);
             std::memcpy(shownSearch,searchInput.text,sizeof(shownSearch));
             browserFor(Section::browse).target=1;
-            command.store(8);searchInput.open=false;section=Section::browse;
+            submit(8,{});searchInput.open=false;section=Section::browse;
         }
         pressed=0;
     } else if(confirmSignOut) {
-        if(pressed&PS5_PAD_BUTTON_CROSS){confirmSignOut=false;settingsContent=false;if(activeHttp)activeHttp->cancelled.store(true);command.store(11);}
+        if(pressed&PS5_PAD_BUTTON_CROSS){confirmSignOut=false;settingsContent=false;if(activeHttp)activeHttp->cancelled.store(true);submit(11,{});}
         else if(pressed&PS5_PAD_BUTTON_CIRCLE)confirmSignOut=false;
         pressed=0;
     } else if(numberEdit.open()) {
@@ -786,16 +803,16 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         submit(19,{});pressed&=~PS5_PAD_BUTTON_CIRCLE;
     } else if(screen==Screen::signIn&&v.canSignOut&&(pressed&PS5_PAD_BUTTON_CIRCLE)) {
         if(activeHttp)activeHttp->cancelled.store(true);
-        command.store(11);pressed=0;
+        submit(11,{});pressed=0;
     } else if(topLevel&&screen!=Screen::settings&&(pressed&PS5_PAD_BUTTON_TRIANGLE)) {
         searchInput.open=true;section=Section::browse;pressed=0;
     }
     if(!streaming&&(pressed&PS5_PAD_BUTTON_CIRCLE)&&activeHttp) {
-        activeHttp->cancelled.store(true);command.store(10);pressed=0;
+        activeHttp->cancelled.store(true);submit(10,{});pressed=0;
     } else if ((streaming||sessionOwned||cv.state==CloudState::starting||cv.state==CloudState::queued)&&
         (data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD) && activeHttp) {
-        activeHttp->cancelled.store(true); command.store(2);
-    } else if (!streaming && (pressed&PS5_PAD_BUTTON_CROSS) && v.state!=State::waiting && v.state!=State::requesting && v.state!=State::authenticated) command.store(1);
+        activeHttp->cancelled.store(true);submit(2,{});
+    } else if (!streaming && (pressed&PS5_PAD_BUTTON_CROSS) && v.state!=State::waiting && v.state!=State::requesting && v.state!=State::authenticated) submit(1,{});
     if(v.state==State::authenticated&&!streaming&&!sessionOwned&&pressed) {
         if(screen==Screen::streamEnded) {
             if((pressed&PS5_PAD_BUTTON_CROSS)&&hasLastLaunch)submit(5,lastLaunch);
@@ -852,9 +869,11 @@ bool draw(ps5::demo::Canvas& c) noexcept {
                             selected=(selected+((pressed&PS5_PAD_BUTTON_LEFT)?count-1:1))%count;
                             Request request;
                             if(selected)std::snprintf(request.region,sizeof(request.region),"%s",network.names[selected-1]);
+                            std::snprintf(pendingRegion,sizeof(pendingRegion),"%s",request.region);
+                            regionPending=true;request.regionRequest=++regionSequence;
                             submit(20,request);
                         }
-                        if(settingsRow==1&&(pressed&PS5_PAD_BUTTON_CROSS))submit(21,{});
+                        if(settingsRow==1&&(pressed&PS5_PAD_BUTTON_CROSS)&&!regionPending)submit(21,{});
                         if(settingsRow==1&&(pressed&PS5_PAD_BUTTON_LEFT))settingsContent=false;
                     } else if(settingsPane==SettingsPane::cache) {
                         if(settingsRow==0&&(pressed&(PS5_PAD_BUTTON_LEFT|PS5_PAD_BUTTON_RIGHT)))setArtwork(pressed&PS5_PAD_BUTTON_RIGHT);

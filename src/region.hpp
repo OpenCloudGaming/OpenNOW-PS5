@@ -24,5 +24,7 @@ struct NetworkView {
     char server[160]{};
     char error[192]{};
     int saveError=0;
+    unsigned selectionRequest=0;
+    bool saving=false;
 };
 }

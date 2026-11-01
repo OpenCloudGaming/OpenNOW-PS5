@@ -1142,7 +1142,7 @@ void networkPane(Canvas& c, const Model& m) {
     y+=94;
     rowFrame(c,m,rowsX,y,rowsW,84,m.settingsContent&&m.settingsRow==1);
     rowText(c,rowsX,y,84,"Refresh regions","Reload the regions currently offered by NVIDIA.");
-    valuePill(c,rowsX+rowsW-22,y+42,"Refresh",false);
+    valuePill(c,rowsX+rowsW-22,y+42,"Refresh",false,!n.saving);
     y+=96;
     eyebrow(c,rowsX+22,y+16,"Regional endpoint",muted,13);
     fitted(c,Face::mono,18,rowsX+22,y+47,*n.endpoint?n.endpoint:"Not connected",rowsW-44,face);
@@ -1152,7 +1152,8 @@ void networkPane(Canvas& c, const Model& m) {
     y+=86;
     drawWrapped(c,Face::semibold,17,rowsX+22,y,26,"Automatic uses NVIDIA's routing. A resumed session keeps its existing server. The allocated server can differ from the regional endpoint; no latency measurement is available here.",rowsW-44,3,muted);
     y+=98;
-    if(n.saveError)label(c,Face::semibold,17,rowsX+22,y,"Could not save the region. The previous preference is still in use.",coral);
+    if(n.saving)label(c,Face::semibold,17,rowsX+22,y,"Saving region...",muted);
+    else if(n.saveError)label(c,Face::semibold,17,rowsX+22,y,"Could not save the region. The previous preference is still in use.",coral);
     else if(*n.error)drawWrapped(c,Face::semibold,17,rowsX+22,y,26,n.error,rowsW-44,3,coral);
     else if(!n.count)label(c,Face::semibold,17,rowsX+22,y,"No manual regions available. Try Refresh.",yellow);
 }

@@ -357,9 +357,18 @@ static void regionTests() {
   browsing.infoStatuses["https://test.geforcenow.com/v2/serverInfo"]=503;
   assert(!independent.refreshRegions("fixture-jwt","fixture-device"));
   assert(!std::memcmp(&catalog,&independent.view(),sizeof(catalog))&&!std::memcmp(&library,&independent.library(),sizeof(library)));
+  // Keep the discovery service down: browsing must still use its cached route.
+  browsing.catalog=nullptr;
+  const auto graphql=browsing.graphql;
+  const auto requests=browsing.urls.size();
+  independent.load("fixture-jwt","fixture-device","Fixture");
+  independent.loadPage(CatalogSource::library,0,"fixture-jwt","fixture-device");
+  assert(independent.view().state==CloudState::catalog&&independent.library().state==CloudState::catalog);
+  assert(browsing.graphql==graphql+2&&browsing.urls.size()==requests+2);
+  const auto refreshedCatalog=independent.view(),refreshedLibrary=independent.library();
   browsing.infoStatuses.clear();
   assert(independent.refreshRegions("fixture-jwt","fixture-device"));
-  assert(!std::memcmp(&catalog,&independent.view(),sizeof(catalog))&&!std::memcmp(&library,&independent.library(),sizeof(library)));
+  assert(!std::memcmp(&refreshedCatalog,&independent.view(),sizeof(catalog))&&!std::memcmp(&refreshedLibrary,&independent.library(),sizeof(library)));
   assert(independent.selectRegion("missing")&&!independent.refreshRegions("fixture-jwt","fixture-device"));
   browsing.catalog=nullptr;
   independent.load("fixture-jwt","fixture-device","Fixture");

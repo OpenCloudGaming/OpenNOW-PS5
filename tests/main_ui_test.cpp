@@ -882,13 +882,40 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     std::snprintf(publishedNetwork.names[0],opennow::regionNameSize,"EU-WEST");
     std::snprintf(publishedNetwork.names[1],opennow::regionNameSize,"EU-CENTRAL");
     const auto networkDraft=draft;
+    Request firstRegion,secondRegion,lastRegion;
     press(PS5_PAD_BUTTON_RIGHT);
-    {Request request;assert(take(request)==20&&!std::strcmp(request.region,"EU-WEST"));}
-    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"EU-WEST");
+    assert(take(firstRegion)==20&&!std::strcmp(firstRegion.region,"EU-WEST"));
+    // No publication between presses: the second press must advance again.
     press(PS5_PAD_BUTTON_RIGHT);
-    {Request request;assert(take(request)==20&&!std::strcmp(request.region,"EU-CENTRAL"));}
+    assert(take(secondRegion)==20&&!std::strcmp(secondRegion.region,"EU-CENTRAL"));
+    publishedNetwork.selectionRequest=firstRegion.regionRequest;publishedNetwork.saveError=EACCES;
+    testButtons=0;draw(canvas);assert(regionPending);
     press(PS5_PAD_BUTTON_LEFT);
-    {Request request;assert(take(request)==20&&!*request.region);}
+    assert(take(lastRegion)==20&&!std::strcmp(lastRegion.region,"EU-WEST"));
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;publishedNetwork.saveError=0;
+    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"EU-WEST");
+    testButtons=0;draw(canvas);assert(!regionPending);
+    press(PS5_PAD_BUTTON_LEFT);
+    assert(take(lastRegion)==20&&!*lastRegion.region);
+    // A failure of the latest request rolls back to the published preference.
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;publishedNetwork.saveError=EACCES;
+    testButtons=0;draw(canvas);assert(!regionPending);
+    press(PS5_PAD_BUTTON_RIGHT);
+    assert(take(lastRegion)==20&&!std::strcmp(lastRegion.region,"EU-CENTRAL"));
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;publishedNetwork.saveError=0;
+    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"EU-CENTRAL");
+    testButtons=0;draw(canvas);assert(!regionPending);
+    // Superseding a queued selection cancels its optimistic display.
+    press(PS5_PAD_BUTTON_LEFT);assert(regionPending);
+    submit(16,{-1,-1,1,true,draft});
+    testButtons=0;draw(canvas);assert(!regionPending&&take()==16);
+    // A request already taken by the worker must still await its own result.
+    press(PS5_PAD_BUTTON_LEFT);assert(take(lastRegion)==20&&regionPending);
+    submit(16,{-1,-1,1,true,draft});
+    testButtons=0;draw(canvas);assert(regionPending&&take()==16);
+    publishedNetwork.selectionRequest=lastRegion.regionRequest;
+    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"%s",lastRegion.region);
+    draw(canvas);assert(!regionPending);
     assert(draft==networkDraft);
     press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_CROSS);assert(take()==21);
     press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent&&command.load()==0);
