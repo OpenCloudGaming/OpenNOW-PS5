@@ -93,9 +93,11 @@ void storeChecks() {
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded);
     assert(!file.hasSettings&&file.artworkCache&&file.settings==quality&&store.info.revision==1);
     const StreamSettings custom{1600,900,45,33000};
+    assert(store.region(path,"EU-WEST")==0);
     store.save(path,custom,available);
     assert(store.defaults==custom&&store.info.revision==2&&store.info.saved);
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&file.hasSettings&&file.settings==custom&&file.artworkCache);
+    assert(!std::strcmp(file.region,"EU-WEST"));
     StreamSettings invalid=custom;invalid.width=1601;
     store.save(path,invalid,available);
     StreamSettings hardware=custom;hardware.mode=opennow::VideoMode::h264Hardware;hardware.network=opennow::NetworkPolicy::fixed;
@@ -116,6 +118,8 @@ void storeChecks() {
     assert(!store.info.saveError);
     assert(store.defaults==quality&&store.info.revision==3&&!store.info.saved);
     assert(opennow::settingsFile::load(path,file)==opennow::settingsFile::Status::loaded&&!file.hasSettings&&!file.artworkCache);
+    assert(!std::strcmp(file.region,"EU-WEST"));
+    assert(store.region(broken,"EU-CENTRAL")!=0&&!std::strcmp(store.saved.region,"EU-WEST"));
     writeV1(path,StreamProfile::smooth);
     store.load(path,quality,true,available);
     assert(store.info.saved&&!store.info.savedUnavailable&&store.defaults==smooth&&store.artworkSaved);
@@ -871,6 +875,25 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     press(PS5_PAD_BUTTON_CIRCLE);assert(take()==18&&http.cancelled);
     forwardLaunchMode.store(false);
     http.cancelled=false;published.canSignOut=false;
+    // Network controls submit identifiers and preserve unrelated stream drafts.
+    published.state=State::authenticated;section=Section::settings;
+    settingsPane=SettingsPane::network;settingsContent=true;settingsRow=0;
+    publishedNetwork.count=2;
+    std::snprintf(publishedNetwork.names[0],opennow::regionNameSize,"EU-WEST");
+    std::snprintf(publishedNetwork.names[1],opennow::regionNameSize,"EU-CENTRAL");
+    const auto networkDraft=draft;
+    press(PS5_PAD_BUTTON_RIGHT);
+    {Request request;assert(take(request)==20&&!std::strcmp(request.region,"EU-WEST"));}
+    std::snprintf(publishedNetwork.preferred,sizeof(publishedNetwork.preferred),"EU-WEST");
+    press(PS5_PAD_BUTTON_RIGHT);
+    {Request request;assert(take(request)==20&&!std::strcmp(request.region,"EU-CENTRAL"));}
+    press(PS5_PAD_BUTTON_LEFT);
+    {Request request;assert(take(request)==20&&!*request.region);}
+    assert(draft==networkDraft);
+    press(PS5_PAD_BUTTON_DOWN);press(PS5_PAD_BUTTON_CROSS);assert(take()==21);
+    press(PS5_PAD_BUTTON_CIRCLE);assert(!settingsContent&&command.load()==0);
+    publishedNetwork={};section=Section::library;
+
     published.state=State::failed;publishedSession=true;
     assert(current()==Screen::signIn);
     press(PS5_PAD_BUTTON_CIRCLE);
