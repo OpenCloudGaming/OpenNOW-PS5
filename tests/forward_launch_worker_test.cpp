@@ -68,6 +68,11 @@ int sceKernelUsleep(unsigned) {
         assert(saved.settings==publishedLaunch&&!std::strcmp(saved.sessionId,"fixture-new"));
         command.store(10);
     }
+    if(scenario==7&&launches&&!escaped){assert(publishedSession);escaped=true;command.store(11);}
+    if(scenario==7&&published.state==State::cancelled) {
+        assert(!publishedSession&&!published.canSignOut&&std::strstr(published.message,"may still be running"));
+        assert(!std::filesystem::exists(testRoot+"/account.bin"));command.store(10);
+    }
     if(scenario>=3&&catalogs==2)command.store(10);
     return 0;
 }
@@ -141,7 +146,7 @@ Response Http::request(void*,const char* method,const char* url,const char* body
         return reply(R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"fixture-new","status":0}})");
     }
     assert(!std::strcmp(method,"DELETE")&&!std::strcmp(url,"https://test.geforcenow.com/v2/session/fixture-new"));
-    ++deletes;return reply("{}");
+    ++deletes;return reply("{}",scenario==7?401:200);
 }
 }
 static void runScenario(unsigned value) {
@@ -167,13 +172,14 @@ static void runScenario(unsigned value) {
     if(scenario==4)assert(lookups==1&&!launches&&catalogs==2);
     if(scenario==3||scenario==4)assert(!sessionLists&&!networkTests&&!deletes);
     if(scenario==5)assert(lookups==1&&launches==1&&networkTests==1&&catalogs==2&&!publishedSession&&!sessionLists&&!deletes);
-    if(scenario==6)assert(!lookups&&!launches&&!networkTests&&catalogs==2&&sessionLists==3&&!deletes);
-    assert(std::filesystem::exists(testRoot+"/account.bin"));
+    if(scenario==6)assert(!lookups&&!launches&&!networkTests&&catalogs==2&&!sessionLists&&!deletes);
+    if(scenario==7)assert(launches==1&&lookups==1&&networkTests==1&&deletes==1&&!publishedSession);
+    assert(std::filesystem::exists(testRoot+"/account.bin")== (scenario!=7));
     assert(!std::filesystem::exists(testRoot+"/session.bin"));
     std::filesystem::remove_all(testRoot);
 }
 int main() {
-    for(unsigned scenario=0;scenario<7;++scenario) {
+    for(unsigned scenario=0;scenario<8;++scenario) {
         const pid_t child=fork();assert(child>=0);
         if(!child){runScenario(scenario);std::exit(0);}
         int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);

@@ -135,6 +135,13 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     publishedDefaults=opennow::gpu::bestSettings();publishedSettings.revision=1;
     const auto press=[&](unsigned buttons){testButtons=0;draw(canvas);testButtons=buttons;draw(canvas);};
 
+    // Startup recovery has no previous launch: both advertised actions must work.
+    publishedCloud.state=CloudState::failed;publishedCloud.launchError=true;
+    assert(!hasLastLaunch&&current()==Screen::launchFailed);
+    press(PS5_PAD_BUTTON_CROSS);assert(take()==15&&!http.cancelled);
+    press(PS5_PAD_BUTTON_CIRCLE);assert(take()==19&&!http.cancelled);
+    publishedCloud.launchError=false;
+
     publishedLibrary.state=CloudState::loading;publishedCloud.state=CloudState::catalog;
     for(unsigned i=0;i<14;++i)game(publishedCloud,i,"Browse Game","STEAM",i==3);
     publishedCloud.count=14;publishedCloud.hasNext=true;publishedCloud.revision=1;
@@ -328,7 +335,7 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
         assert(current()==Screen::launchFailed&&publishedCloud.launchError&&publishedCloud.state==CloudState::catalog);
         assert(!std::strcmp(publishedCloud.current.title,publishedLibrary.games[7].title)&&std::strstr(publishedCloud.message,"Not qualified"));
         testButtons=0;draw(canvas);
-        press(PS5_PAD_BUTTON_CIRCLE);assert(take()==15);
+        press(PS5_PAD_BUTTON_CIRCLE);assert(take()==19);
         publishedCloud=before;
     }
 
@@ -623,7 +630,7 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
         press(PS5_PAD_BUTTON_L1);press(PS5_PAD_BUTTON_TRIANGLE);
         assert(command.load()==0&&section==Section::library);
         press(PS5_PAD_BUTTON_CIRCLE);
-        assert(take()==15&&!http.cancelled);
+        assert(take()==19&&!http.cancelled);
     }
     publishedCloud.launchError=false;publishedCloud.state=CloudState::catalog;
     publishedStreamFailure=true;
@@ -854,6 +861,11 @@ bool scenarios(ps5::demo::Canvas& canvas) noexcept {
     assert(!testArt.paused());
     artCache=nullptr;
 
+    // A saved-login outage offers sign-out, not application exit (issue #22).
+    published.state=State::requesting;published.canSignOut=true;
+    press(PS5_PAD_BUTTON_CROSS);assert(command.load()==0);
+    press(PS5_PAD_BUTTON_CIRCLE);assert(take()==11&&http.cancelled);
+    http.cancelled=false;published.canSignOut=false;
     published.state=State::failed;publishedSession=true;
     assert(current()==Screen::signIn);
     press(PS5_PAD_BUTTON_CIRCLE);

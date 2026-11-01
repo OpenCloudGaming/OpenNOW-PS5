@@ -304,14 +304,18 @@ void* worker(void*) {
     };
     bool forwardPending=launchArgs.status==opennow::forwarder::LaunchArgsStatus::valid;
     char streamFailure[192]{};
+    bool signOutCleanupFailed=false;
     opennow::ui::StreamStore store;
     pthread_mutex_lock(&viewMutex);const bool artworkStart=artworkWanted;pthread_mutex_unlock(&viewMutex);
     store.load(OPENNOW_SETTINGS_PATH,opennow::gpu::bestSettings(),artworkStart,opennow::gpu::settingsAvailable);
     auto launchSettings=store.defaults;
-    const auto recoverSession=[&](std::uint64_t now) {
+    const auto recoverSession=[&](std::uint64_t now,bool savedOnly=false) {
         profileSaveFailed=false;
         opennow::Session retainedSession;
         const bool retained=opennow::sessionFile::load(OPENNOW_SESSION_PATH,login.userId(),retainedProfile)==opennow::sessionFile::Status::loaded;
+        // A fresh login has no local session to resume. A global region outage
+        // must not trap it in recovery; launch responses still enforce conflicts.
+        if(savedOnly&&!retained)return;
         if(retained) {
             std::snprintf(retainedSession.id,sizeof(retainedSession.id),"%s",retainedProfile.sessionId);
             retainedSession.settings=retainedProfile.settings;retainedSession.audioChannels=retainedProfile.audioChannels;
@@ -343,10 +347,11 @@ void* worker(void*) {
             streamAttempted=false;rejected[0]=0;
             login.finishAsync(sceKernelGetProcessTime()/1000000);
             const bool hadSession=*cloud.session().id;
-            const bool stopped=cloud.stop(login.cloudToken(),id);
-            if(stopped&&(hadSession||action==11)){opennow::sessionFile::remove(OPENNOW_SESSION_PATH);retainedProfile={};profileSaveFailed=false;}
+            const bool stopped=(action==11&&!hadSession)||cloud.stop(login.cloudToken(),id);
+            if((stopped||action==11)&&(hadSession||action==11)){opennow::sessionFile::remove(OPENNOW_SESSION_PATH);retainedProfile={};profileSaveFailed=false;}
             if(action==10){ps5::demo::requestStop();return nullptr;}
-            if(stopped) {
+            if(stopped||action==11) {
+                if(action==11)signOutCleanupFailed=!stopped;
                 if(action!=18)login.cancel();
                 cloud.reset();catalogLoaded=false;streamFailure[0]=0;
             }
@@ -400,11 +405,12 @@ void* worker(void*) {
                 pthread_mutex_lock(&viewMutex);publishedLibrary=cloud.library();pthread_mutex_unlock(&viewMutex);
                 cloud.load(login.cloudToken(),id,"");
                 catalogLoaded=true;
-                if(!skipCatalogRecovery)recoverSession(now/1000000);
+                if(!skipCatalogRecovery)recoverSession(now/1000000,true);
                 skipCatalogRecovery=false;
             }
+            if(action==5&&!*cloud.session().id&&cloud.recoveryRequired())recoverSession(now/1000000);
             const bool idle=!*cloud.session().id;
-            if(action==5&&idle&&request.index>=0) {
+            if(action==5&&idle&&!cloud.recoveryRequired()&&request.index>=0) {
                 const auto chosen=store.launch(request.hasSettings,request.settings,opennow::gpu::settingsAvailable);
                 streamFailure[0]=0;rejected[0]=0;
                 if(!chosen) {
@@ -432,6 +438,10 @@ void* worker(void*) {
                 streamFailure[0]=0;rejected[0]=0;
                 if(cloud.recoveryRequired())recoverSession(now/1000000);
                 else cloud.dismissLaunchError();
+            }
+            if(action==19&&idle) {
+                streamFailure[0]=0;rejected[0]=0;
+                cloud.dismissLaunchError();
             }
             if(action==8&&idle){
                 streamFailure[0]=0;
@@ -508,6 +518,8 @@ void* worker(void*) {
         // A cancellation during a blocking request must win over its response.
         if (command.load()==2||command.load()==10||command.load()==11||command.load()==18) continue;
         auto view=login.view();
+        if(signOutCleanupFailed&&view.state==State::cancelled&&!view.canSignOut)
+            std::snprintf(view.message,sizeof(view.message),"Signed out. The cloud session may still be running; end it from another client.");
         if(forwardLaunchMode.load()) {
             if(launchArgs.status==opennow::forwarder::LaunchArgsStatus::invalid) {
                 view.state=State::failed;
@@ -754,7 +766,10 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     } else if(screen==Screen::settings&&settingsContent&&(pressed&PS5_PAD_BUTTON_CIRCLE)) {
         settingsContent=false;pressed&=~PS5_PAD_BUTTON_CIRCLE;
     } else if(screen==Screen::launchFailed&&(pressed&PS5_PAD_BUTTON_CIRCLE)) {
-        submit(15,{});pressed&=~PS5_PAD_BUTTON_CIRCLE;
+        submit(19,{});pressed&=~PS5_PAD_BUTTON_CIRCLE;
+    } else if(screen==Screen::signIn&&v.canSignOut&&(pressed&PS5_PAD_BUTTON_CIRCLE)) {
+        if(activeHttp)activeHttp->cancelled.store(true);
+        command.store(11);pressed=0;
     } else if(topLevel&&screen!=Screen::settings&&(pressed&PS5_PAD_BUTTON_TRIANGLE)) {
         searchInput.open=true;section=Section::browse;pressed=0;
     }
@@ -770,6 +785,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
             else if(pressed&PS5_PAD_BUTTON_SQUARE)submit(15,{});
         } else if(screen==Screen::launchFailed) {
             if((pressed&PS5_PAD_BUTTON_CROSS)&&hasLastLaunch)submit(5,lastLaunch);
+            else if(pressed&PS5_PAD_BUTTON_CROSS)submit(15,{});
         } else if(screen==Screen::detail) {
             const auto& view=opennow::ui::catalogFor(detailSection,cv,lv);
             Browser& b=browserFor(detailSection);
