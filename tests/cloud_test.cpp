@@ -375,6 +375,15 @@ static void regionTests() {
   assert(recovery.urls.back().starts_with("https://east.geforcenow.com/v2/session?"));
   assert(resumed.stop("fixture-jwt","fixture-device"));
  }
+ {
+  // NVIDIA's region names contain spaces and parentheses; rejecting them made every recovery inconclusive.
+  Mock named;Cloud client(request,&named,trust);client.load("fixture-jwt","fixture-device");
+  named.serverInfo=R"json({"requestStatus":{"statusCode":1},"metaData":[{"key":"local-region","value":"France 1"},{"key":"gfn-regions","value":"Northern California (USA), France 1, United Kingdom 2"},{"key":"Northern California (USA)","value":"https://us-california-north.geforcenow.com"},{"key":"France 1","value":"https://eu-france-1.geforcenow.com"},{"key":"United Kingdom 2","value":"https://eu-united-kingdom-2.geforcenow.com"}]})json";
+  assert(client.recover("fixture-jwt","fixture-device",1,StreamSettings{})==RecoveryResult::none);
+  assert(client.refreshRegions("fixture-jwt","fixture-device")&&client.network().count==3);
+  assert(client.selectRegion("Northern California (USA)")&&client.selectRegion("France 1"));
+  assert(!client.selectRegion("https://east.geforcenow.com/")&&!client.selectRegion("../west"));
+ }
  for(bool catalogError:{false,true}) {
   Mock browsing;Cloud independent(request,&browsing,trust);
   independent.load("fixture-jwt","fixture-device");

@@ -12,7 +12,8 @@ inline bool validRegionName(const char* name) noexcept {
     for(std::size_t i=0;i<regionNameSize;++i) {
         const unsigned char ch=name[i];
         if(!ch)return true;
-        if(!((ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z')||(ch>='0'&&ch<='9')||ch=='-'||ch=='_'))return false;
+        // NVIDIA names regions like "France 1" or "Northern California (USA)"; URL and path characters stay rejected.
+        if(!((ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z')||(ch>='0'&&ch<='9')||ch=='-'||ch=='_'||ch==' '||ch=='('||ch==')'))return false;
     }
     return false;
 }
