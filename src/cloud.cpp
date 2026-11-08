@@ -513,7 +513,7 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
     char netId[128]{},netUrl[768],netBody[256];
     std::snprintf(netUrl,sizeof(netUrl),"%sv2/nettestsession",allocationBase_);
     std::snprintf(netBody,sizeof(netBody),
-        R"({"netTestRequestData":{"clientPlatformName":"GFN-PC","netTestProfile":{"widthInPixels":%d,"heightInPixels":%d,"framesPerSecond":%d}}})",
+        R"({"netTestRequestData":{"clientPlatformName":"browser","netTestProfile":{"widthInPixels":%d,"heightInPixels":%d,"framesPerSecond":%d}}})",
         settings.width,settings.height,settings.fps);
     const auto net=request_(context_,"POST",netUrl,
         netBody,jwt,device);
@@ -526,7 +526,7 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
     cJSON_AddNumberToObject(req,"appId",launchId);cJSON_AddStringToObject(req,"internalTitle",game.title);
     for(auto* key:{"parentSessionId","clientDisplayHdrCapabilities","partnerCustomData"})cJSON_AddNullToObject(req,key);
     if(*netId)cJSON_AddStringToObject(req,"networkTestSessionId",netId);else cJSON_AddNullToObject(req,"networkTestSessionId");
-    cJSON_AddStringToObject(req,"clientIdentification","GFN-PC");cJSON_AddStringToObject(req,"deviceHashId",device);cJSON_AddStringToObject(req,"clientVersion","30.0");cJSON_AddStringToObject(req,"clientPlatformName","Windows");cJSON_AddStringToObject(req,"sdkVersion","1.0");
+    cJSON_AddStringToObject(req,"clientIdentification","GFN-PC");cJSON_AddStringToObject(req,"deviceHashId",device);cJSON_AddStringToObject(req,"clientVersion","30.0");cJSON_AddStringToObject(req,"clientPlatformName","browser");cJSON_AddStringToObject(req,"sdkVersion","1.0");
     cJSON_AddItemToArray(cJSON_AddArrayToObject(req,"availableSupportedControllers"),cJSON_CreateNumber(2));
     cJSON_AddNumberToObject(req,"preferredController",2);cJSON_AddBoolToObject(req,"useOps",true);
     cJSON_AddBoolToObject(req,"accountLinked",game.owned);cJSON_AddBoolToObject(req,"secureRTSPSupported",false);
@@ -668,7 +668,7 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
         auto* data=cJSON_AddObjectToObject(body,"sessionRequestData");cJSON_AddNumberToObject(data,"appId",existingApp);cJSON_AddNumberToObject(data,"audioMode",2);cJSON_AddNumberToObject(data,"remoteControllersBitmap",1);cJSON_AddNumberToObject(data,"sdrHdrMode",hdr);
         for(const char* key:{"networkTestSessionId","internalTitle","parentSessionId"})cJSON_AddNullToObject(data,key);
         cJSON_AddItemToArray(cJSON_AddArrayToObject(data,"availableSupportedControllers"),cJSON_CreateNumber(2));cJSON_AddNumberToObject(data,"preferredController",2);
-        cJSON_AddStringToObject(data,"clientVersion","30.0");cJSON_AddStringToObject(data,"deviceHashId",device);cJSON_AddStringToObject(data,"clientPlatformName",*str(request,"clientPlatformName")?str(request,"clientPlatformName"):"Windows");cJSON_AddNumberToObject(data,"surroundAudioInfo",0);cJSON_AddNumberToObject(data,"clientTimezoneOffset",0);cJSON_AddStringToObject(data,"clientIdentification","GFN-PC");cJSON_AddNumberToObject(data,"streamerVersion",1);cJSON_AddBoolToObject(data,"secureRTSPSupported",false);cJSON_AddStringToObject(data,"sdkVersion","1.0");cJSON_AddNumberToObject(data,"enhancedStreamMode",1);
+        cJSON_AddStringToObject(data,"clientVersion","30.0");cJSON_AddStringToObject(data,"deviceHashId",device);cJSON_AddStringToObject(data,"clientPlatformName",*str(request,"clientPlatformName")?str(request,"clientPlatformName"):"browser");cJSON_AddNumberToObject(data,"surroundAudioInfo",0);cJSON_AddNumberToObject(data,"clientTimezoneOffset",0);cJSON_AddStringToObject(data,"clientIdentification","GFN-PC");cJSON_AddNumberToObject(data,"streamerVersion",1);cJSON_AddBoolToObject(data,"secureRTSPSupported",false);cJSON_AddStringToObject(data,"sdkVersion","1.0");cJSON_AddNumberToObject(data,"enhancedStreamMode",1);
         for(const char* key:{"appLaunchMode","enablePersistingInGameSettings"})if(const auto* original=obj(request,key))cJSON_AddItemToObject(data,key,cJSON_Duplicate(original,true));
         auto* entries=cJSON_AddArrayToObject(data,"metaData");const auto count=std::to_string(channels);
         const char* keys[]={"wssignaling","SubSessionId","surroundAudioInfo","GSStreamerType"};const char* values[]={"1",subSession,count.c_str(),"WebRTC"};

@@ -56,7 +56,7 @@ static void requestParityTests() {
   auto* body=cJSON_Parse(mock.body.c_str());const auto* data=cJSON_GetObjectItemCaseSensitive(body,"sessionRequestData");assert(data);
   assert(cJSON_GetObjectItemCaseSensitive(data,"appId")->valueint==42&&!cJSON_GetObjectItemCaseSensitive(data,"cmsId"));
   assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"internalTitle")->valuestring,"Fixture Game"));
-  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"clientPlatformName")->valuestring,"Windows"));
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"clientPlatformName")->valuestring,"browser"));
   assert(cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(data,"partnerCustomData"))&&cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(data,"accountLinked")));
   assert(cJSON_GetObjectItemCaseSensitive(data,"preferredController")->valueint==2&&cJSON_GetObjectItemCaseSensitive(data,"clientTimezoneOffset")->valueint==0);
   assert(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(data,"clientRequestMonitorSettings"),0),"dpi")->valueint==96);
@@ -65,7 +65,7 @@ static void requestParityTests() {
   assert(cJSON_GetObjectItemCaseSensitive(dlss,"srScale")->valueint==100&&!cJSON_GetObjectItemCaseSensitive(dlss,"fgMultiplier"));
   std::string subSession;const cJSON* entry;cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(data,"metaData"))if(!std::strcmp(cJSON_GetObjectItemCaseSensitive(entry,"key")->valuestring,"SubSessionId"))subSession=cJSON_GetObjectItemCaseSensitive(entry,"value")->valuestring;
   assert(subSession.size()==36&&subSession[14]=='4'&&std::strchr("89ab",subSession[19])&&subSession!=previous&&subSession!="fixture-device");previous=subSession;
-  cJSON_Delete(body);assert(mock.netBody.find("\"clientPlatformName\":\"GFN-PC\"")!=std::string::npos);assert(client.stop("fixture-jwt","fixture-device"));
+  cJSON_Delete(body);assert(mock.netBody.find("\"clientPlatformName\":\"browser\"")!=std::string::npos);assert(client.stop("fixture-jwt","fixture-device"));
  }
  for(const char* features:{R"([{"key":"IN_GAME_SETTINGS_PERSISTENCE_ENABLED","value":true}])",R"({"key":"IN_GAME_SETTINGS_PERSISTENCE_ENABLED","value":"TRUE"})",R"([{"key":"IN_GAME_SETTINGS_PERSISTENCE_ENABLED","value":false}])",R"([{"key":"OTHER","value":true}])"}) {
   const bool supported=(std::strstr(features,"true")&&!std::strstr(features,"OTHER"))||std::strstr(features,"TRUE");
