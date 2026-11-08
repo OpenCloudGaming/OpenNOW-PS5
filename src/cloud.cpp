@@ -199,10 +199,40 @@ void pickArtwork(char* out,std::size_t capacity,const cJSON* images,std::initial
     for(const char* key:keys)if(artworkUrl(str(images,key))&&put(out,capacity,str(images,key)))return;
 }
 bool safeId(const char* s) {if(!*s)return false;for(;*s;++s)if(!((*s>='a'&&*s<='z')||(*s>='A'&&*s<='Z')||(*s>='0'&&*s<='9')||*s=='-'||*s=='_'))return false;return true;}
+// Rejects placeholders CloudMatch can send (".cloudmatchbeta.nvidiagrid.net", "0.0.0.0", "::") instead of dialing them.
+bool usableHost(const char* host) {
+    char bare[256];const std::size_t length=std::strlen(host);
+    if(*host=='['){if(length<3||host[length-1]!=']'||length-2>=sizeof(bare))return false;std::memcpy(bare,host+1,length-2);bare[length-2]=0;if(!std::strchr(bare,':'))return false;}
+    else if(!put(bare,sizeof(bare),host))return false;
+    if(!*bare)return false;
+    unsigned char address[16]{};
+    if(std::strchr(bare,':')){if(inet_pton(AF_INET6,bare,address)!=1)return false;}
+    else if(inet_pton(AF_INET,bare,address)!=1)return *bare!='.'&&bare[std::strlen(bare)-1]!='.'&&!std::strstr(bare,"..");
+    for(const unsigned char byte:address)if(byte)return true;
+    return false;
+}
+// Accepts wss:// or https:// (rewritten to wss://) with a usable host and an optional numeric port; never userinfo or fragments.
+bool secureUrl(char* out,std::size_t capacity,const char* url) {
+    const bool https=!std::strncmp(url,"https://",8);
+    if(!https&&std::strncmp(url,"wss://",6))return false;
+    for(const char* p=url;*p;++p)if(static_cast<unsigned char>(*p)<=32||static_cast<unsigned char>(*p)>=127||*p=='@'||*p=='#'||*p=='\\')return false;
+    const char* start=url+(https?8:6);const char* end=start+std::strcspn(start,"/?");
+    const char* hostEnd=*start=='['?static_cast<const char*>(std::memchr(start,']',end-start)):start+std::strcspn(start,":/?");
+    if(!hostEnd)return false;
+    if(*start=='[')++hostEnd;
+    char host[256];
+    if(hostEnd==start||hostEnd-start>=static_cast<std::ptrdiff_t>(sizeof(host)))return false;
+    std::memcpy(host,start,hostEnd-start);host[hostEnd-start]=0;
+    if(!usableHost(host))return false;
+    if(hostEnd!=end){char* tail=nullptr;const long port=*hostEnd==':'?std::strtol(hostEnd+1,&tail,10):0;if(tail!=end||port<1||port>65535)return false;}
+    const int n=std::snprintf(out,capacity,"wss://%s",start);
+    if(n<=0||static_cast<std::size_t>(n)>=capacity){out[0]=0;return false;}
+    return true;
+}
 bool connectionAddress(const cJSON* connection,char* host,std::size_t capacity,int& port,const char* fallback="") {
     const auto* ip=obj(connection,"ip");if(cJSON_IsArray(ip))ip=cJSON_GetArrayItem(ip,0);
     if(!put(host,capacity,cJSON_IsString(ip)?ip->valuestring:fallback))return false;
-    port=num(connection,"port");
+    port=number(connection,"port",0);
     if(const char* scheme=std::strstr(str(connection,"resourcePath"),"://")) {
         const char* start=scheme+3;
         const char* end=start;
@@ -221,21 +251,25 @@ bool connectionAddress(const cJSON* connection,char* host,std::size_t capacity,i
         }
     }
     for(const char* p=host;*p;++p)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||*p=='.'||*p=='-'||*p==':'||*p=='['||*p==']'))return false;
-    return *host&&port>=0&&port<=65535;
+    return *host&&usableHost(host)&&port>=0&&port<=65535;
 }
 bool signalingAddress(char* out,std::size_t capacity,const cJSON* connection,const char* fallback="") {
     const char* path=str(connection,"resourcePath");
-    if(!std::strncmp(path,"wss://",6))return put(out,capacity,path);
-    if(!std::strncmp(path,"https://",8)){return std::snprintf(out,capacity,"wss://%s",path+8)>0&&std::strlen(path)-2<capacity;}
+    if(!std::strncmp(path,"wss://",6)||!std::strncmp(path,"https://",8))return secureUrl(out,capacity,path);
     char host[256];int port=0;
     if(!connectionAddress(connection,host,sizeof(host),port,fallback))return false;
-    if(!std::strncmp(path,"rtsps://",8)||!std::strncmp(path,"rtsp://",7)) {
-        const int n=std::snprintf(out,capacity,"wss://%s/nvst/",host);
-        return n>0&&static_cast<std::size_t>(n)<capacity;
+    const bool bareIpv6=std::strchr(host,':')&&*host!='[';
+    int n;
+    if(!std::strncmp(path,"rtsps://",8)||!std::strncmp(path,"rtsp://",7))n=std::snprintf(out,capacity,bareIpv6?"wss://[%s]/nvst/":"wss://%s/nvst/",host);
+    else {
+        if(*path&&(*path!='/'||path[1]=='/'))return false;
+        // Protocol 4 entries carry their mapped signaling port; otherwise the port field is the media hint and WSS stays on 443.
+        const int signalingPort=number(connection,"appLevelProtocol")==4&&obj(connection,"port")?port:443;
+        if(signalingPort<1)return false;
+        n=std::snprintf(out,capacity,bareIpv6?"wss://[%s]:%d%s":"wss://%s:%d%s",host,signalingPort,*path?path:"/nvst/");
     }
-    if(*path&&(*path!='/'||path[1]=='/'))return false;
-    int n=std::snprintf(out,capacity,"wss://%s:443%s",host,*path?path:"/nvst/");
-    return n>0&&static_cast<std::size_t>(n)<capacity;
+    if(n<=0||static_cast<std::size_t>(n)>=capacity){out[0]=0;return false;}
+    return true;
 }
 
 }
@@ -289,7 +323,7 @@ void Cloud::fail(const char* text) noexcept {view_.state=CloudState::failed;std:
 void Cloud::failLaunch(const char* text) noexcept {fail(text);view_.launchError=true;}
 void Cloud::clearSession() noexcept {
     secureErase(&session_,sizeof(session_));session_={};allocationSettings_={};controlBase_[0]=0;
-    nextPoll_=resumeDeadline_=0;pollFailures_=resumePolls_=0;audioCapacity_=2;resumePending_=false;
+    nextPoll_=resumeDeadline_=0;pollFailures_=resumePolls_=unusableReadyPolls_=0;audioCapacity_=2;resumePending_=false;
     view_.queuePosition=view_.setupStep=-1;
 }
 void Cloud::reset() noexcept {
@@ -507,7 +541,7 @@ void Cloud::start(const Game& game,const char* jwt,const char* device,std::uint6
     session_.audioChannels=audioChannels;
     audioCapacity_=audioChannels;
     char subSession[37];if(!newSubSession(subSession)){failLaunch("Could not create cloud session identity");return;}
-    currentNow_=now;view_.sessionConflict=false;remote_={};remoteCount_=0;conflictUntil_=0;
+    currentNow_=now;view_.sessionConflict=false;remote_={};remoteCount_=0;conflictUntil_=0;unusableReadyPolls_=0;
     network_.server[0]=0;
     copy(controlBase_,allocationBase_);
     char netId[128]{},netUrl[768],netBody[256];
@@ -680,7 +714,7 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
         if(resumed.error||resumed.status==401||resumed.status==403||(!notPaused&&(resumed.status<200||resumed.status>=300||number(statusData,"statusCode")!=1)))return failed("Cloud session resume failed. The existing session is retained");
     }
     session_.signaling[0]=session_.mediaIp[0]=0;session_.mediaPort=0;session_.signalingSource=SignalingSource::none;
-    resumePending_=true;resumeDeadline_=now+90;resumePolls_=pollFailures_=0;nextPoll_=now+1;
+    resumePending_=true;resumeDeadline_=now+90;resumePolls_=pollFailures_=unusableReadyPolls_=0;nextPoll_=now+1;
     recoveryBlocked_=false;view_.launchError=view_.sessionConflict=false;view_.queuePosition=view_.setupStep=-1;
     view_.state=CloudState::queued;copy(view_.message,"Cloud session resuming. Waiting for fresh server status...");return RecoveryResult::pending;
 }
@@ -704,7 +738,7 @@ bool Cloud::parseSession(const Response& r) noexcept {
             str(status,"unifiedErrorCode"),num(sess,"errorCode",-1));
         if(cJSON_IsNumber(obj(status,"unifiedErrorCode")))std::snprintf(text,sizeof(text),"HTTP %ld code %d / %.64s / unified %d / session %d",r.status,num(status,"statusCode",-1),str(status,"statusDescription"),num(status,"unifiedErrorCode"),num(sess,"errorCode",-1));
         failLaunch(text);return false;}
-    if(!cJSON_IsObject(sess)){failLaunch("Cloud session response missing session");return false;}
+    if(!cJSON_IsObject(sess)&&!patching){failLaunch("Cloud session response missing session");return false;}
     const char* returnedId=str(sess,"sessionId");
     if(obj(sess,"sessionId")&&(!safeId(returnedId)||std::strlen(returnedId)>=sizeof(session_.id)||(*session_.id&&std::strcmp(session_.id,returnedId)))){failLaunch("Cloud session response has a different or invalid ID");return false;}
     if(*returnedId)copy(session_.id,returnedId);
@@ -717,14 +751,14 @@ bool Cloud::parseSession(const Response& r) noexcept {
     const int step=number(obj(sess,"seatSetupInfo"),"seatSetupStep");view_.setupStep=step>=0&&step<=6?step:-1;
     for(const auto* queue:{obj(sess,"queuePosition"),obj(obj(sess,"seatSetupInfo"),"queuePosition"),obj(obj(sess,"sessionProgress"),"queuePosition"),obj(obj(sess,"progressInfo"),"queuePosition")}){int position;if(integer(queue,position)){view_.queuePosition=position>0?position:-1;break;}}
     session_.signaling[0]=session_.mediaIp[0]=0;session_.mediaPort=0;session_.signalingSource=SignalingSource::none;
-    if(*str(sess,"signalingUrl")&&copy(session_.signaling,str(sess,"signalingUrl")))session_.signalingSource=SignalingSource::explicitUrl;
+    if(secureUrl(session_.signaling,sizeof(session_.signaling),str(sess,"signalingUrl")))session_.signalingSource=SignalingSource::explicitUrl;
     if(*str(sess,"serverIp"))copy(session_.mediaIp,str(sess,"serverIp"));
     const auto* control=obj(sess,"sessionControlInfo");
     if(!*session_.mediaIp) {char ip[sizeof(session_.mediaIp)];int port=0;if(connectionAddress(control,ip,sizeof(ip),port))copy(session_.mediaIp,ip);}
     const cJSON* conn;
     for(int usage:{14,16}) {
         cJSON_ArrayForEach(conn,obj(sess,"connectionInfo")) {
-            if(num(conn,"usage")==usage&&!*session_.signaling&&signalingAddress(session_.signaling,sizeof(session_.signaling),conn,session_.mediaIp))
+            if(number(conn,"usage")==usage&&!*session_.signaling&&signalingAddress(session_.signaling,sizeof(session_.signaling),conn,session_.mediaIp))
                 session_.signalingSource=usage==14?SignalingSource::streamConnection:SignalingSource::alternateConnection;
         }
     }
@@ -732,7 +766,7 @@ bool Cloud::parseSession(const Response& r) noexcept {
     for(int usage:{2,17,14}) {
         char bestIp[sizeof(session_.mediaIp)]{};int bestPort=0;
         cJSON_ArrayForEach(conn,obj(sess,"connectionInfo")) {
-            if(num(conn,"usage")!=usage)continue;
+            if(number(conn,"usage")!=usage)continue;
             char ip[sizeof(session_.mediaIp)];int port=0;
             if(connectionAddress(conn,ip,sizeof(ip),port,usage==14?session_.mediaIp:"")&&port>0&&(usage!=14||port>bestPort)) {
                 copy(bestIp,ip);bestPort=port;
@@ -745,11 +779,14 @@ bool Cloud::parseSession(const Response& r) noexcept {
         std::snprintf(network_.server,sizeof(network_.server),std::strchr(session_.mediaIp,':')&&*session_.mediaIp!='['?"[%s]:%d":"%s:%d",session_.mediaIp,session_.mediaPort);
     }
     if(patching||state==6||(resumePending_&&(state==4||state==5))){view_.state=CloudState::queued;copy(view_.message,patching?"Server patching game. Waiting for launch...":"Cloud session resuming. Waiting for server...");}
-    else if((state==2||state==3)&&*session_.signaling){resumePending_=false;view_.state=CloudState::ready;copy(view_.message,"Cloud session ready. Connecting stream...");}
+    else if((state==2||state==3)&&*session_.signaling){resumePending_=false;unusableReadyPolls_=0;view_.state=CloudState::ready;copy(view_.message,"Cloud session ready. Connecting stream...");}
     else if(state<0||state>3){failLaunch("Unknown cloud session state");return false;}
     else {
         view_.state=CloudState::queued;
-        if(state==2||state==3)copy(view_.message,"Server ready, but no supported streaming address received");
+        if(state==2||state==3){
+            if(++unusableReadyPolls_>=12){failLaunch("NVIDIA did not return a usable streaming address in time. The session is retained");return false;}
+            copy(view_.message,"Server ready, but no supported streaming address received");
+        }
         else if(view_.setupStep==5)copy(view_.message,"Cleaning up your previous session");
         else if(view_.setupStep==6)copy(view_.message,"Waiting for cloud storage");
         else if(view_.queuePosition>0)std::snprintf(view_.message,sizeof(view_.message),"Waiting for an available rig - queue position %d",view_.queuePosition);

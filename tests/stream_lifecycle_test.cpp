@@ -320,6 +320,21 @@ int main() {
     assert(stream.failed());
     clean();
 
+    // Losing signaling after the answer keeps the negotiated media and stops using the socket.
+    assert(stream.start(launch, "test"));
+    queuePayload("sdp", answer);
+    stream.tick(1000000);
+    assert(!stream.failed()&&std::any_of(outbound.begin(),outbound.end(),[](const auto& text){return text.find("answer")!=std::string::npos;}));
+    diagnostics.clear();
+    dropSocket = true;
+    stream.tick(1500000);
+    assert(stream.active()&&!stream.failed()&&sockets==0&&peers==1);
+    assert(std::any_of(diagnostics.begin(),diagnostics.end(),[](const auto& note){return note.find("SIGNALING lost after answer")!=std::string::npos&&note.find("mock socket loss")!=std::string::npos;}));
+    stream.tick(4000000);
+    assert(stream.active()&&!stream.failed());
+    stream.stop();
+    clean();
+
     for (auto state : {PEER_CONNECTION_FAILED, PEER_CONNECTION_CLOSED,PEER_CONNECTION_DISCONNECTED}) {
         assert(stream.start(launch, "test"));
         media.frames = 1;

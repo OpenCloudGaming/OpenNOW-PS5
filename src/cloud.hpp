@@ -81,7 +81,7 @@ private:
     char controlBase_[512]{};
     RemoteSeat remote_{};
     char remoteIds_[32][128]{};
-    unsigned remoteCount_=0,pollFailures_=0,resumePolls_=0;
+    unsigned remoteCount_=0,pollFailures_=0,resumePolls_=0,unusableReadyPolls_=0;
     unsigned audioCapacity_=2;
     bool recoveryBlocked_=false,resumePending_=false;
     std::uint64_t conflictUntil_=0,resumeDeadline_=0,currentNow_=0;
