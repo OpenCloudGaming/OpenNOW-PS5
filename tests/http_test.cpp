@@ -52,19 +52,25 @@ extern "C" CURLcode curl_easy_getinfo(CURL*,CURLINFO info,...) {
 int main() {
     opennow::Http http;assert(http.ready());
     const char* ua="GFN-PC/30.0 (Windows NT 10.0) BifrostClientSDK/4.9 (38495286)";
+    const char* chrome="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+    auto browserIdentity=[&]{
+        return headers["nv-client-id"]=="ec7e38d4-03af-4b58-b131-cfb0495903ab"&&headers["nv-client-type"]=="BROWSER"&&
+            headers["nv-client-streamer"]=="WEBRTC"&&headers["nv-client-version"]=="2.0.89.154"&&headers["nv-browser-type"]=="CHROME"&&
+            headers["nv-device-os"]=="WINDOWS"&&headers["nv-device-type"]=="DESKTOP"&&!headers.count("x-nv-client-identity")&&
+            headers["x-device-id"]=="synthetic-device"&&strings[CURLOPT_USERAGENT]==chrome;
+    };
     reset();auto result=opennow::Http::request(&http,"PUT","https://test.geforcenow.com/v2/session/test","{\"action\":2}","synthetic-token","synthetic-device");
     assert(!result.error);
     assert(strings[CURLOPT_CUSTOMREQUEST]=="PUT"&&strings[CURLOPT_POSTFIELDS]=="{\"action\":2}"&&bodyLength==12);
     assert(headers["Content-Type"]=="text/plain");
     assert(headers["Authorization"]=="GFNJWT synthetic-token");
-    assert(headers["nv-client-id"]=="ec7e38d4-03af-4b58-b131-cfb0495903ab");
-    assert(headers["nv-client-version"]=="2.0.87.131");
-    assert(headers["nv-device-os"]=="WINDOWS"&&headers["nv-device-type"]=="DESKTOP");
-    assert(headers["x-device-id"]=="synthetic-device"&&headers["x-nv-client-identity"]==ua&&strings[CURLOPT_USERAGENT]==ua);
+    assert(browserIdentity());
     reset();result=opennow::Http::request(&http,"POST","https://test.geforcenow.com/v2/nettestsession","{}","synthetic-token","synthetic-device");
-    assert(!result.error&&headers["Content-Type"]=="application/json");
+    assert(!result.error&&headers["Content-Type"]=="application/json"&&browserIdentity());
     reset();result=opennow::Http::request(&http,"POST","https://games.geforce.com/graphql","{}","synthetic-token","synthetic-device");
     assert(!result.error&&headers["Content-Type"]=="application/json");
+    assert(headers["nv-client-type"]=="NATIVE"&&headers["nv-client-streamer"]=="NVIDIA-CLASSIC"&&headers["nv-client-version"]=="2.0.87.131");
+    assert(!headers.count("nv-browser-type")&&headers["x-nv-client-identity"]==ua&&strings[CURLOPT_USERAGENT]==ua);
     reset();result=opennow::Http::request(&http,"POST","https://login.nvidia.com/token","grant_type=refresh_token",nullptr,nullptr);
     assert(!result.error&&headers["Content-Type"]=="application/x-www-form-urlencoded; charset=UTF-8");
     const auto before=performed;

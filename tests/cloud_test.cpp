@@ -56,7 +56,7 @@ static void requestParityTests() {
   auto* body=cJSON_Parse(mock.body.c_str());const auto* data=cJSON_GetObjectItemCaseSensitive(body,"sessionRequestData");assert(data);
   assert(cJSON_GetObjectItemCaseSensitive(data,"appId")->valueint==42&&!cJSON_GetObjectItemCaseSensitive(data,"cmsId"));
   assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"internalTitle")->valuestring,"Fixture Game"));
-  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"clientPlatformName")->valuestring,"Windows"));
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"clientPlatformName")->valuestring,"browser"));
   assert(cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(data,"partnerCustomData"))&&cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(data,"accountLinked")));
   assert(cJSON_GetObjectItemCaseSensitive(data,"preferredController")->valueint==2&&cJSON_GetObjectItemCaseSensitive(data,"clientTimezoneOffset")->valueint==0);
   assert(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(data,"clientRequestMonitorSettings"),0),"dpi")->valueint==96);
@@ -65,7 +65,7 @@ static void requestParityTests() {
   assert(cJSON_GetObjectItemCaseSensitive(dlss,"srScale")->valueint==100&&!cJSON_GetObjectItemCaseSensitive(dlss,"fgMultiplier"));
   std::string subSession;const cJSON* entry;cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(data,"metaData"))if(!std::strcmp(cJSON_GetObjectItemCaseSensitive(entry,"key")->valuestring,"SubSessionId"))subSession=cJSON_GetObjectItemCaseSensitive(entry,"value")->valuestring;
   assert(subSession.size()==36&&subSession[14]=='4'&&std::strchr("89ab",subSession[19])&&subSession!=previous&&subSession!="fixture-device");previous=subSession;
-  cJSON_Delete(body);assert(mock.netBody.find("\"clientPlatformName\":\"GFN-PC\"")!=std::string::npos);assert(client.stop("fixture-jwt","fixture-device"));
+  cJSON_Delete(body);assert(mock.netBody.find("\"clientPlatformName\":\"browser\"")!=std::string::npos);assert(client.stop("fixture-jwt","fixture-device"));
  }
  for(const char* features:{R"([{"key":"IN_GAME_SETTINGS_PERSISTENCE_ENABLED","value":true}])",R"({"key":"IN_GAME_SETTINGS_PERSISTENCE_ENABLED","value":"TRUE"})",R"([{"key":"IN_GAME_SETTINGS_PERSISTENCE_ENABLED","value":false}])",R"([{"key":"OTHER","value":true}])"}) {
   const bool supported=(std::strstr(features,"true")&&!std::strstr(features,"OTHER"))||std::strstr(features,"TRUE");
@@ -534,7 +534,14 @@ int main(){
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"resourcePath":"rtsps://203.0.113.10:48322"}]}})","wss://203.0.113.10/nvst/","203.0.113.10",48322},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":443},{"usage":14,"ip":["203.0.113.11"],"port":48322}]}})","wss://203.0.113.10:443/nvst/","203.0.113.11",48322},
   NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"wss://explicit.geforcenow.com/nvst/","connectionInfo":[{"usage":2,"resourcePath":"udp://203.0.113.12:48010"},{"usage":17,"ip":"203.0.113.13","port":48011},{"usage":14,"ip":"203.0.113.14","port":48322}]}})","wss://explicit.geforcenow.com/nvst/","203.0.113.12",48010},
-  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"serverIp":"203.0.113.15","connectionInfo":[{"usage":14,"resourcePath":"/nvst/","port":48322}]}})","wss://203.0.113.15:443/nvst/","203.0.113.15",48322}
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"serverIp":"203.0.113.15","connectionInfo":[{"usage":14,"resourcePath":"/nvst/","port":48322}]}})","wss://203.0.113.15:443/nvst/","203.0.113.15",48322},
+  // OpenNOW-Switch #49: string numbers, protocol-4 signaling ports, bare IPv6 hosts, https signaling URLs and placeholder hosts.
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":"14","ip":"203.0.113.20","resourcePath":"/nvst/","port":"48322"}]}})","wss://203.0.113.20:443/nvst/","203.0.113.20",48322},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"appLevelProtocol":4,"ip":"203.0.113.21","resourcePath":"/nvst/","port":8443}]}})","wss://203.0.113.21:8443/nvst/","203.0.113.21",8443},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"connectionInfo":[{"usage":14,"ip":"2001:db8::10","resourcePath":"/nvst/","port":48322}]}})","wss://[2001:db8::10]:443/nvst/","2001:db8::10",48322},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"https://explicit.geforcenow.com:9443/nvst/","connectionInfo":[{"usage":2,"ip":"203.0.113.23","port":48010}]}})","wss://explicit.geforcenow.com:9443/nvst/","203.0.113.23",48010},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"wss://user@explicit.geforcenow.com/nvst/","connectionInfo":[{"usage":14,"ip":".cloudmatchbeta.nvidiagrid.net","resourcePath":"/nvst/","port":48322},{"usage":14,"ip":"0.0.0.0","resourcePath":"/nvst/","port":48321},{"usage":14,"ip":"203.0.113.22","resourcePath":"/nvst/","port":48010}]}})","wss://203.0.113.22:443/nvst/","203.0.113.22",48010},
+  NetworkCase{R"({"requestStatus":{"statusCode":1},"session":{"status":2,"signalingUrl":"wss://[not-ip]:443junk/nvst/","connectionInfo":[{"usage":14,"ip":"::","resourcePath":"/nvst/","port":48322},{"usage":14,"resourcePath":"wss://bad..host/nvst/","port":48321},{"usage":14,"ip":"203.0.113.24","resourcePath":"/nvst/","port":48010}]}})","wss://203.0.113.24:443/nvst/","203.0.113.24",48010}
  }){
   m.poll=fixture.response;c.launch("fixture-jwt","fixture-device",20);c.tick("fixture-jwt","fixture-device",23);
   assert(c.view().state==CloudState::ready);
@@ -544,6 +551,11 @@ int main(){
   assert(c.stop("fixture-jwt","fixture-device"));
  }
  m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":2}})";c.launch("fixture-jwt","fixture-device",30);c.tick("fixture-jwt","fixture-device",33);assert(std::strstr(c.view().message,"no supported streaming address"));c.stop("fixture-jwt","fixture-device");
+ // A ready seat that never gets a usable address is retained but no longer polled forever.
+ c.launch("fixture-jwt","fixture-device",50);
+ for(unsigned poll=1;poll<=12;++poll){assert(c.view().state==CloudState::queued);c.tick("fixture-jwt","fixture-device",50+3*poll);}
+ assert(c.view().state==CloudState::failed&&std::strstr(c.view().message,"usable streaming address")&&*c.session().id);
+ assert(c.stop("fixture-jwt","fixture-device"));
  m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":1,"seatSetupInfo":{"seatSetupStep":3}}})";c.launch("fixture-jwt","fixture-device",40);c.tick("fixture-jwt","fixture-device",43);assert(std::strstr(c.view().message,"Configuring"));assert(c.view().setupStep==3&&c.view().queuePosition==-1);c.stop("fixture-jwt","fixture-device");
  m.poll=R"({"requestStatus":{"statusCode":1},"session":{"status":6}})";
  c.launch("fixture-jwt","fixture-device",40);c.tick("fixture-jwt","fixture-device",43);
@@ -553,6 +565,13 @@ int main(){
  c.launch("fixture-jwt","fixture-device",40);
  assert(c.view().state==CloudState::queued);assert(!std::strcmp(c.session().id,"patching-fixture"));assert(std::strstr(c.view().message,"patching"));
  m.created=nullptr;m.poll=R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"patching-fixture","status":2,"signalingUrl":"wss://test.geforcenow.com/nvst/"}})";c.tick("fixture-jwt","fixture-device",43);assert(c.view().state==CloudState::ready);assert(c.stop("fixture-jwt","fixture-device"));m.poll=nullptr;
+ // A patching poll may omit the session object; keep waiting on the held seat instead of failing it.
+ m.created=R"({"requestStatus":{"statusCode":41,"statusDescription":"APP_PATCHING_STATUS"},"session":{"sessionId":"patching-fixture","status":1}})";
+ c.launch("fixture-jwt","fixture-device",60);m.created=nullptr;
+ m.poll=R"({"requestStatus":{"statusCode":41,"statusDescription":"APP_PATCHING_STATUS"}})";c.tick("fixture-jwt","fixture-device",63);
+ assert(c.view().state==CloudState::queued&&std::strstr(c.view().message,"patching")&&!std::strcmp(c.session().id,"patching-fixture"));
+ m.poll=R"({"requestStatus":{"statusCode":1},"session":{"sessionId":"patching-fixture","status":2,"signalingUrl":"wss://test.geforcenow.com/nvst/"}})";c.tick("fixture-jwt","fixture-device",66);
+ assert(c.view().state==CloudState::ready);assert(c.stop("fixture-jwt","fixture-device"));m.poll=nullptr;
  for(long status:{404L,410L}){
   c.launch("fixture-jwt","fixture-device",40);m.stopStatus=status;
   assert(c.stop("fixture-jwt","fixture-device"));assert(!*c.session().id);assert(c.view().state==CloudState::catalog);

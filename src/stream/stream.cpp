@@ -212,8 +212,12 @@ void Stream::checkVideoProgress(std::uint64_t now){
  if(!recoveryRequestedAt_){media_.requireKeyframe();peer_connection_request_video_keyframe(pc_);keyframeRequested_=now;recoveryRequestedAt_=now;}
  else if(now-recoveryRequestedAt_>=4000000)fail("WebRTC video stopped decoding after a keyframe request");
 }
-void Stream::tick(std::uint64_t now){if(!active())return;if(entropyFailed)fail("Secure entropy failed");if(failed_){release();return;}if(!started_)started_=now;ws_->poll();
- if(!ws_->is_connected())fail(("Signaling: "+ws_->get_last_error()).c_str());
+void Stream::tick(std::uint64_t now){if(!active())return;if(entropyFailed)fail("Secure entropy failed");if(failed_){release();return;}if(!started_)started_=now;if(ws_)ws_->poll();
+ if(ws_&&!ws_->is_connected()){
+  // After the answer, media no longer needs signaling: keep the stream and leave ending it to the media watchdogs.
+  if(!answerSent_)fail(("Signaling: "+ws_->get_last_error()).c_str());
+  else{opennow_media_note(("SIGNALING lost after answer: "+ws_->get_last_error()).c_str());delete ws_;ws_=nullptr;}
+ }
  if(failed_){release();return;}
  sendCandidates();
 for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_)||failed_)break;
