@@ -27,11 +27,14 @@ namespace opennow::appStorage
 {
 inline int initialize() noexcept
 {
-    if (accountFile::makeDirectory(OPENNOW_STORAGE_ROOT, 0700) != 0 && errno != EEXIST)
+    if (accountFile::makeDirectory(OPENNOW_STORAGE_ROOT, 0755) != 0 && errno != EEXIST)
         return errno;
     const int fd = accountFile::open(OPENNOW_STORAGE_ROOT, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (fd < 0)
         return errno;
+    // Lets FTP read the 0644 diagnostics; account, settings and session files stay 0600.
+    // Best effort: a failure only hides logs and must not block login storage.
+    (void)accountFile::permissions(fd, 0755);
     if (accountFile::close(fd) != 0)
         return errno;
     if (!accountFile::syncParent(OPENNOW_STORAGE_ROOT))

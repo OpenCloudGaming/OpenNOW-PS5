@@ -16,7 +16,9 @@ int mkdirError = 0;
 int directoryError = 0;
 int syncError = 0;
 int closeError = 0;
+int chmodError = 0;
 int syncCalls = 0;
+int chmodCalls = 0;
 int nativeError(int error)
 {
     return error ? static_cast<int>(0x80020000u | static_cast<unsigned>(error)) : 0;
@@ -26,7 +28,7 @@ void reset()
     opened.clear();
     directoryExists = false;
     legacyReadable = false;
-    mkdirError = directoryError = syncError = closeError = syncCalls = 0;
+    mkdirError = directoryError = syncError = closeError = chmodError = syncCalls = chmodCalls = 0;
 }
 }
 
@@ -56,13 +58,19 @@ extern "C" int sceKernelOpen(const char *path, int flags, unsigned mode)
 extern "C" int sceKernelMkdir(const char *path, unsigned mode)
 {
     assert(std::string(path) == "/download0/opennow");
-    assert(mode == 0700);
+    assert(mode == 0755);
     if (mkdirError)
         return nativeError(mkdirError);
     if (directoryExists)
         return nativeError(EEXIST);
     directoryExists = true;
     return 0;
+}
+extern "C" int sceKernelFchmod(int fd, unsigned mode)
+{
+    assert(fd == 7 && mode == 0755);
+    ++chmodCalls;
+    return nativeError(chmodError);
 }
 extern "C" int sceKernelFsync(int fd)
 {
@@ -87,10 +95,10 @@ int main()
 {
     using namespace opennow::appStorage;
     assert(initialize() == 0);
-    assert(directoryExists && syncCalls == 1);
+    assert(directoryExists && syncCalls == 1 && chmodCalls == 1);
     assert((opened == std::vector<std::string>{"/download0/opennow", "/download0"}));
     assert(initialize() == 0);
-    assert(syncCalls == 2);
+    assert(syncCalls == 2 && chmodCalls == 2);
     opened.clear();
     opennow_network_note("socket result=1 errno=0");
     opennow_media_note("VIDEO dimensions changed: 1920x1080");
@@ -116,6 +124,10 @@ int main()
     assert(initialize() == EIO);
     syncError = 0;
     assert(initialize() == 0);
+    reset();
+    chmodError = EPERM;
+    assert(initialize() == 0);
+    assert(chmodCalls == 1 && syncCalls == 1);
     reset();
     closeError = EIO;
     assert(initialize() == EIO);
