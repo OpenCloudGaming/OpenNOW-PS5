@@ -197,6 +197,7 @@ static void recoveryTests() {
    assert(cJSON_GetObjectItemCaseSensitive(data,"appLaunchMode")->valueint==1&&cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(data,"enablePersistingInGameSettings")));
    assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"deviceHashId")->valuestring,"fixture-device"));
    for(const char* key:{"clientRequestMonitorSettings","requestedStreamingFeatures","codec","maxBitrateKbps","requestedAudioFormat","cmsId"})assert(!cJSON_GetObjectItemCaseSensitive(data,key));
+   assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"clientPlatformName")->valuestring,"Windows"));
    cJSON_Delete(root);
   }
   client.launch("fixture-jwt","fixture-device",10);assert(mock.posts==0);
@@ -204,6 +205,16 @@ static void recoveryTests() {
   client.tick("fixture-jwt","fixture-device",11);assert(client.view().state==CloudState::ready);
   assert(client.stop("fixture-jwt","fixture-device")&&!client.session().recovered);
   assert(mock.deleteUrl=="https://203.0.113.50/v2/session/fixture-id");
+ }
+ {
+  // A recovered seat without a stored clientPlatformName resumes with the browser platform.
+  Mock mock;auto seat=existingSeat(4);const std::string stored="\"clientPlatformName\":\"Windows\",";seat.erase(seat.find(stored),stored.size());
+  const auto listed=remoteList(seat),lookup=envelope(seat);
+  mock.remote=listed.c_str();mock.lookup=lookup.c_str();Cloud client(request,&mock,trust);client.load("fixture-jwt","fixture-device");
+  assert(client.recover("fixture-jwt","fixture-device",10,StreamSettings{})==RecoveryResult::pending&&mock.puts==1);
+  auto* root=cJSON_Parse(mock.putBody.c_str());const auto* data=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(data,"clientPlatformName")->valuestring,"browser"));
+  cJSON_Delete(root);assert(client.stop("fixture-jwt","fixture-device"));
  }
  {
   Mock mock;const auto seat=existingSeat(),listed=remoteList(seat);auto* root=cJSON_Parse(seat.c_str());cJSON_DeleteItemFromObjectCaseSensitive(root,"sessionControlInfo");char* encoded=cJSON_PrintUnformatted(root);const auto lookup=envelope(encoded);cJSON_free(encoded);cJSON_Delete(root);

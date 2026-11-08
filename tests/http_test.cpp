@@ -65,6 +65,8 @@ int main() {
     assert(headers["Content-Type"]=="text/plain");
     assert(headers["Authorization"]=="GFNJWT synthetic-token");
     assert(browserIdentity());
+    reset();result=opennow::Http::request(&http,"GET","https://test.geforcenow.com/v2/session",nullptr,"synthetic-token","synthetic-device");
+    assert(!result.error&&browserIdentity());
     reset();result=opennow::Http::request(&http,"POST","https://test.geforcenow.com/v2/nettestsession","{}","synthetic-token","synthetic-device");
     assert(!result.error&&headers["Content-Type"]=="application/json"&&browserIdentity());
     reset();result=opennow::Http::request(&http,"POST","https://games.geforce.com/graphql","{}","synthetic-token","synthetic-device");
