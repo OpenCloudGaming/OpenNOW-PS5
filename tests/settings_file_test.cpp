@@ -299,12 +299,12 @@ int main() {
             assertCorrupt(path,bytes);
         }
 
-    for(const char* name:{"","EU-WEST","NP-FRK-06","us_east"}) {
+    for(const char* name:{"","EU-WEST","NP-FRK-06","us_east","France 1","Northern California (USA)"}) {
         auto preferred=custom;
         std::snprintf(preferred.region,sizeof(preferred.region),"%s",name);
         assertRoundtrip(path,preferred);
     }
-    for(const char* name:{"https://example.com/","EU WEST","../west"}) {
+    for(const char* name:{"https://example.com/","EU\tWEST","../west"}) {
         auto bytes=v5;
         std::memcpy(bytes.data()+68,name,std::strlen(name));sign(bytes);assertCorrupt(path,bytes);
         auto invalid=custom;std::snprintf(invalid.region,sizeof(invalid.region),"%s",name);

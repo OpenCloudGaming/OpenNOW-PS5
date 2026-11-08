@@ -609,7 +609,8 @@ RecoveryResult Cloud::recover(const char* jwt,const char* device,std::uint64_t n
             }
         }
         for(unsigned i=0;i<count;++i) {
-            const auto elapsed=monotonicMs()-began;if(elapsed>9000){incomplete=true;break;}
+            // Checking all 24 current regions sequentially took about 8.4 s from Europe on a PS5; keep headroom.
+            const auto elapsed=monotonicMs()-began;if(elapsed>20000){incomplete=true;break;}
             std::snprintf(url,sizeof(url),"%sv2/session",regions[i]);auto response=request_(context_,"GET",url,nullptr,jwt,device);
             if(response.status==401||response.status==403)return failed("Authentication required to check existing sessions");
             Json root(response);const auto* sessions=obj(root.p,"sessions");
