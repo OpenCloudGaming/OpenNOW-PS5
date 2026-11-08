@@ -321,6 +321,13 @@ void* worker(void*) {
     auto launchSettings=store.defaults;
     const auto recoverSession=[&](std::uint64_t now,bool savedOnly=false,const opennow::Game* requested=nullptr) {
         profileSaveFailed=false;
+        if(!savedOnly) {
+            // Recovery blocks while every region is checked; show the launch screen instead of the previous page.
+            pthread_mutex_lock(&viewMutex);
+            publishedCloud.state=CloudState::starting;if(requested)publishedCloud.current=*requested;
+            std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"Checking for an existing cloud session...");
+            pthread_mutex_unlock(&viewMutex);
+        }
         opennow::Session retainedSession;
         const bool retained=opennow::sessionFile::load(OPENNOW_SESSION_PATH,login.userId(),retainedProfile)==opennow::sessionFile::Status::loaded;
         // A fresh login has no local session to resume. A global region outage
