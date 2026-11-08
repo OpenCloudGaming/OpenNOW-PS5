@@ -10,7 +10,8 @@ bundle="$cache/ps5-opengl-sdk-$version"
 source_root="$cache/source"
 mkdir -p "$cache"
 if [[ ! -f "$archive" ]]; then
-    curl -fL "https://github.com/blackbearreloaded/ps5-opengl/releases/download/v$version/ps5-opengl-sdk-$version.tar.gz" -o "$archive.download"
+    # The original blackbearreloaded/ps5-opengl release is gone; this mirror serves the same archive, verified below.
+    curl -fL "https://github.com/JVK3R/ps5-opengl/releases/download/v$version/ps5-opengl-sdk-$version.tar.gz" -o "$archive.download"
     printf '%s  %s\n' "$digest" "$archive.download" | sha256sum --check --strict
     mv "$archive.download" "$archive"
 fi
