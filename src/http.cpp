@@ -73,11 +73,15 @@ Response Http::request(void* ptr,const char* method,const char* url,const char* 
     append(cloudmatch&&!nettest?"Content-Type: text/plain":cloud?"Content-Type: application/json":"Content-Type: application/x-www-form-urlencoded; charset=UTF-8");
     char authorization[16512]{};
     if (bearer) { std::snprintf(authorization,sizeof(authorization),"Authorization: %s %s",cloud ? "GFNJWT" : "Bearer",bearer); append(authorization); }
+    constexpr const char* nativeAgent="GFN-PC/30.0 (Windows NT 10.0) BifrostClientSDK/4.9 (38495286)";
+    constexpr const char* browserAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
     if (cloud) {
-        append("nv-client-id: ec7e38d4-03af-4b58-b131-cfb0495903ab");append("nv-client-type: NATIVE");
-        append("nv-client-streamer: NVIDIA-CLASSIC");append("nv-client-version: 2.0.87.131");
+        // Since 2026-10-27 CloudMatch only assigns a WebRTC streamer (and sends an SDP offer) to a browser identity.
+        append("nv-client-id: ec7e38d4-03af-4b58-b131-cfb0495903ab");
+        if(cloudmatch){append("nv-client-type: BROWSER");append("nv-client-streamer: WEBRTC");append("nv-client-version: 2.0.89.154");append("nv-browser-type: CHROME");}
+        else {append("nv-client-type: NATIVE");append("nv-client-streamer: NVIDIA-CLASSIC");append("nv-client-version: 2.0.87.131");}
         append("nv-device-os: WINDOWS");append("nv-device-type: DESKTOP");append("nv-device-make: UNKNOWN");append("nv-device-model: UNKNOWN");
-        append("x-nv-client-identity: GFN-PC/30.0 (Windows NT 10.0) BifrostClientSDK/4.9 (38495286)");
+        if(!cloudmatch){char identity[128];std::snprintf(identity,sizeof(identity),"x-nv-client-identity: %s",nativeAgent);append(identity);}
         if(device){char id[256];std::snprintf(id,sizeof(id),"x-device-id: %s",device);append(id);}
     }
     if (device && !cloud) {
@@ -90,7 +94,7 @@ Response Http::request(void* ptr,const char* method,const char* url,const char* 
     }
     curl_easy_setopt(easy,CURLOPT_ERRORBUFFER,self.error_);
     curl_easy_setopt(easy,CURLOPT_URL,url);
-    curl_easy_setopt(easy,CURLOPT_USERAGENT,cloud?"GFN-PC/30.0 (Windows NT 10.0) BifrostClientSDK/4.9 (38495286)":"Mozilla/5.0 (X11; Linux x86_64; Steam Deck) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36");
+    curl_easy_setopt(easy,CURLOPT_USERAGENT,cloudmatch?browserAgent:cloud?nativeAgent:"Mozilla/5.0 (X11; Linux x86_64; Steam Deck) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36");
     curl_easy_setopt(easy,CURLOPT_HTTPHEADER,headers);
     curl_easy_setopt(easy,CURLOPT_FOLLOWLOCATION,0L);
     curl_easy_setopt(easy,CURLOPT_PROXY,"");
